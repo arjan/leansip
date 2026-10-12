@@ -387,7 +387,7 @@ void MainWindow::updateRegistration(CallController::RegistrationState state, con
 
 void MainWindow::showError(const QString &message)
 {
-    m_status->setText(message);
+    m_status->setText(message.simplified()); // never let stray newlines grow the window
 }
 
 void MainWindow::tickElapsed()

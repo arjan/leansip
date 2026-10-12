@@ -201,15 +201,25 @@ void CallController::onResponse(const BaresipResponse &resp)
         return;
     if (resp.ok)
         return;
-    qCWarning(lcCall) << "command" << command << "failed:" << resp.data;
+    // baresip terminates reply text with '\n'; a wrapped status label would show that as a blank line.
+    const QString detail = resp.data.trimmed();
+    qCWarning(lcCall) << "command" << command << "failed:" << detail;
     if (command == QLatin1String("play"))
         return; // a missing tone file is cosmetic; don't bother the user
+    if (command == QLatin1String("hangup") && m_callState != CallState::Idle) {
+        // baresip has no call to hang up, so whatever we thought was in progress is gone
+        // (e.g. a CALL_CLOSED we never saw). Resync rather than leave the UI stuck.
+        qCInfo(lcCall) << "hangup rejected while" << m_callState << "- resetting to idle";
+        setCallState(CallState::Idle);
+        emit callEnded(detail.isEmpty() ? QStringLiteral("no active call") : detail);
+        return;
+    }
     if (command == QLatin1String("dial") && m_callState == CallState::Outgoing) {
         playErrorTone();
         setCallState(CallState::Idle);
-        emit callEnded(resp.data.isEmpty() ? QStringLiteral("dial failed") : resp.data);
+        emit callEnded(detail.isEmpty() ? QStringLiteral("dial failed") : detail);
     }
-    emit commandFailed(command, resp.data);
+    emit commandFailed(command, detail);
 }
 
 void CallController::playErrorTone()

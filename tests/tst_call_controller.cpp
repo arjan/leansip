@@ -310,13 +310,37 @@ private slots:
 
         rig.controller.dial("1");
         QVERIFY(rig.waitCommands(2));
-        rig.server.sendResponse(rig.server.lastToken(), false, "could not dial");
+        rig.server.sendResponse(rig.server.lastToken(), false, "could not dial\n"); // baresip appends '\n'
         QTRY_COMPARE(rig.controller.callState(), CallState::Idle);
         QCOMPARE(ended.first().first().toString(), "could not dial");
+        QCOMPARE(failed.first().at(1).toString(), "could not dial");
         QCOMPARE(failed.size(), 1);
         QVERIFY(rig.waitCommands(3));
         QCOMPARE(rig.server.lastCommand(), "play");
         QCOMPARE(rig.server.lastParams(), "error.wav");
+    }
+
+    void hangupRejectedResetsToIdle()
+    {
+        // The UI believes a call is outgoing but baresip has none (its CALL_CLOSED was missed):
+        // a rejected hangup must resync to Idle instead of leaving the user stuck.
+        Rig rig;
+        QVERIFY(rig.connectAndRegister());
+        QSignalSpy ended(&rig.controller, &CallController::callEnded);
+        QSignalSpy failed(&rig.controller, &CallController::commandFailed);
+        rig.controller.dial("1");
+        QVERIFY(rig.waitCommands(2));
+        rig.server.sendResponse(rig.server.lastToken(), true);
+        QCOMPARE(rig.controller.callState(), CallState::Outgoing);
+
+        rig.controller.hangup();
+        QVERIFY(rig.waitCommands(3));
+        QCOMPARE(rig.server.lastCommand(), "hangup");
+        rig.server.sendResponse(rig.server.lastToken(), false, "no active call\n");
+        QTRY_COMPARE(rig.controller.callState(), CallState::Idle);
+        QCOMPARE(ended.size(), 1);
+        QCOMPARE(ended.first().first().toString(), "no active call");
+        QCOMPARE(failed.size(), 0); // handled, not surfaced as a failure
     }
 
     void unknownTokenResponseIsIgnored()
