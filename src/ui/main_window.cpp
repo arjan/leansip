@@ -38,6 +38,8 @@ MainWindow::MainWindow(const AccountInfo &account, CallController *controller, Q
     });
     connect(m_controller, &CallController::callEnded, this, [this](const QString &reason) {
         m_status->setText(reason.isEmpty() ? tr("Call ended") : tr("Ended: %1").arg(reason));
+        // The field held DTMF digits during the call; put the dialled number back for a retry.
+        m_number->setText(m_outgoingCall ? m_lastDialed : QString());
     });
     connect(m_controller, &CallController::commandFailed, this, [this](const QString &cmd, const QString &detail) {
         showError(tr("%1 failed: %2").arg(cmd, detail));
@@ -67,8 +69,8 @@ void MainWindow::buildUi(const AccountInfo &account)
 
     m_dialerPage = new QWidget(this);
     auto *root = new QVBoxLayout(m_dialerPage);
-    root->setContentsMargins(16, 12, 16, 12);
-    root->setSpacing(8);
+    root->setContentsMargins(16, 6, 16, 6);
+    root->setSpacing(4);
 
     auto *header = new QHBoxLayout;
     m_accountLabel = new QLabel(account.label(), m_dialerPage);
@@ -82,13 +84,17 @@ void MainWindow::buildUi(const AccountInfo &account)
 
     m_number = new QLineEdit(m_dialerPage);
     m_number->setObjectName(QStringLiteral("numberEdit"));
-    m_number->setPlaceholderText(tr("number or sip:user@host"));
+    m_number->setPlaceholderText(tr("enter number"));
+    m_number->setAlignment(Qt::AlignCenter);
     m_number->setFrame(false);
     QFont font = m_number->font();
-    font.setPointSize(font.pointSize() + 8);
+    font.setPointSize(kNumberMaxPt);
     m_number->setFont(font);
     m_number->installEventFilter(this);
-    connect(m_number, &QLineEdit::textChanged, this, [this] { updateForState(m_controller->callState()); });
+    connect(m_number, &QLineEdit::textChanged, this, [this] {
+        fitNumberFont();
+        updateForState(m_controller->callState());
+    });
     root->addWidget(m_number);
 
     m_status = new QLabel(m_dialerPage);
@@ -115,7 +121,7 @@ QWidget *MainWindow::buildHelpPage()
 {
     auto *page = new QWidget(this);
     auto *layout = new QVBoxLayout(page);
-    layout->setContentsMargins(16, 12, 16, 12);
+    layout->setContentsMargins(16, 6, 16, 6);
     auto *text = new QLabel(page);
     text->setObjectName(QStringLiteral("helpLabel"));
     text->setTextFormat(Qt::RichText);
@@ -142,8 +148,12 @@ bool MainWindow::isHelpVisible() const
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched == m_number && event->type() == QEvent::KeyPress && handleKey(static_cast<QKeyEvent *>(event)))
-        return true;
+    if (watched == m_number) {
+        if (event->type() == QEvent::KeyPress && handleKey(static_cast<QKeyEvent *>(event)))
+            return true;
+        if (event->type() == QEvent::Resize)
+            fitNumberFont(); // the field's width is only known once the layout has run
+    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -198,6 +208,7 @@ bool MainWindow::handleKey(QKeyEvent *event)
 
     if (state == S::Active && isDtmf(event->text())) {
         m_controller->sendDtmf(event->text().at(0));
+        m_number->setText(m_number->text() + event->text()); // field is read-only to the user, so append ourselves
         return true;
     }
     // Typing is only meaningful while idle; during a call the field is read-only anyway.
@@ -211,6 +222,7 @@ void MainWindow::startCall()
         return;
     m_status->clear();
     m_lastDialed = number;
+    m_outgoingCall = true;
     m_controller->dial(number);
     // A queued dial leaves the state Idle, so no signal fires; refresh explicitly.
     updateForState(m_controller->callState());
@@ -259,6 +271,23 @@ void MainWindow::mousePressEvent(QMouseEvent *event)
     QWidget::mousePressEvent(event);
 }
 
+void MainWindow::fitNumberFont()
+{
+    const QString text = m_number->text().isEmpty() ? m_number->placeholderText() : m_number->text();
+    // Fixed slack (not font-relative) so repeated fits of the same text converge on one size.
+    const int available = m_number->contentsRect().width() - 8;
+    QFont font = m_number->font();
+    int pt = kNumberMaxPt;
+    for (; pt > kNumberMinPt; --pt) {
+        font.setPointSize(pt);
+        if (QFontMetrics(font).horizontalAdvance(text) <= available)
+            break;
+    }
+    font.setPointSize(pt);
+    if (font.pointSize() != m_number->font().pointSize())
+        m_number->setFont(font);
+}
+
 void MainWindow::dialNumber(const QString &number)
 {
     m_number->setText(number);
@@ -283,6 +312,7 @@ void MainWindow::updateForState(CallController::CallState state)
     switch (state) {
     case S::Idle:
         m_elapsedTimer.stop();
+        m_number->setPlaceholderText(tr("enter number"));
         if (m_controller->hasPendingDial()) {
             m_status->setText(tr("Waiting for registration…"));
             m_hint->setText(tr("esc cancel  ·  ? help"));
@@ -297,16 +327,24 @@ void MainWindow::updateForState(CallController::CallState state)
         m_hint->setText(tr("esc hang up"));
         break;
     case S::Incoming:
+        m_outgoingCall = false;
         m_status->setText(tr("Incoming: %1").arg(m_controller->peer()));
         m_hint->setText(tr("⏎ answer  ·  esc decline"));
         break;
     case S::Active:
-        m_callClock.start();
-        m_elapsedTimer.start();
-        tickElapsed();
+        // Entering the call (not every refresh): the peer moves to the status line and the
+        // field starts collecting DTMF digits.
+        if (m_appliedState != S::Active) {
+            m_number->clear();
+            m_number->setPlaceholderText(tr("dtmf"));
+            m_callClock.start();
+            m_elapsedTimer.start();
+            tickElapsed();
+        }
         m_hint->setText(tr("0-9 * # dtmf  ·  esc hang up"));
         break;
     }
+    m_appliedState = state;
 }
 
 void MainWindow::updateRegistration(CallController::RegistrationState state, const QString &detail)

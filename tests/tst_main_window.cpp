@@ -42,6 +42,30 @@ private slots:
         QVERIFY(m_window->numberEdit()->hasFocus());
     }
 
+    void numberFontIsBigAndShrinksToFit()
+    {
+        QCOMPARE(m_window->numberEdit()->alignment(), Qt::AlignCenter);
+        QCOMPARE(m_window->numberEdit()->placeholderText(), "enter number");
+        const int big = m_window->numberEdit()->font().pointSize();
+        QVERIFY(big >= 24);
+
+        m_window->numberEdit()->setText("+31201234567");
+        QVERIFY(m_window->numberEdit()->font().pointSize() >= 24); // a normal number stays large
+
+        m_window->numberEdit()->setText("sip:alice@example.com:5060");
+        const int small = m_window->numberEdit()->font().pointSize();
+        QVERIFY(small < big);
+        QVERIFY(QFontMetrics(m_window->numberEdit()->font()).horizontalAdvance(m_window->numberEdit()->text())
+                <= m_window->numberEdit()->width());
+
+        // Beyond the minimum size the field simply scrolls; the font never drops below the floor.
+        m_window->numberEdit()->setText("sip:a.very.long.username@some.long.domain.example.com");
+        QCOMPARE(m_window->numberEdit()->font().pointSize(), 11);
+
+        m_window->numberEdit()->clear();
+        QCOMPARE(m_window->numberEdit()->font().pointSize(), big); // grows back
+    }
+
     void typingGoesToNumberField()
     {
         QTest::keyClicks(m_window->numberEdit(), "12#+");
@@ -68,24 +92,31 @@ private slots:
         QTRY_VERIFY(m_window->statusLabel()->text().contains("Connected"));
         QVERIFY(m_window->hintLabel()->text().contains("dtmf"));
 
-        // Digits send DTMF instead of editing while active; other keys are swallowed.
+        // In a call the field collects DTMF digits; other keys are swallowed.
+        QCOMPARE(m_window->numberEdit()->text(), "");
+        QCOMPARE(m_window->numberEdit()->placeholderText(), "dtmf");
         QTest::keyClick(m_window->numberEdit(), Qt::Key_9);
         QTRY_COMPARE(m_server->received.size(), 3);
         QCOMPARE(m_server->lastCommand(), "sndcode");
         QCOMPARE(m_server->lastParams(), "9");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_NumberSign, Qt::ShiftModifier, 0);
+        QTRY_COMPARE(m_server->received.size(), 4);
+        QCOMPARE(m_server->lastParams(), "#");
         QTest::keyClick(m_window->numberEdit(), Qt::Key_A);
         QTest::qWait(30);
-        QCOMPARE(m_server->received.size(), 3);
-        QCOMPARE(m_window->numberEdit()->text(), "555");
+        QCOMPARE(m_server->received.size(), 4);
+        QCOMPARE(m_window->numberEdit()->text(), "9#");
 
         QTest::keyClick(m_window->numberEdit(), Qt::Key_Escape);
-        QTRY_COMPARE(m_server->received.size(), 4);
+        QTRY_COMPARE(m_server->received.size(), 5);
         QCOMPARE(m_server->lastCommand(), "hangup");
 
         m_server->sendEvent("CALL_CLOSED", {{"param", "Normal"}});
         QTRY_VERIFY(!m_window->numberEdit()->isReadOnly());
         QCOMPARE(m_window->statusLabel()->text(), "Ended: Normal");
         QCOMPARE(m_window->lastDialed(), "555");
+        QCOMPARE(m_window->numberEdit()->text(), "555"); // dialled number restored for a retry
+        QCOMPARE(m_window->numberEdit()->placeholderText(), "enter number");
     }
 
     void upRecallsLastNumber()
@@ -138,9 +169,14 @@ private slots:
 
         QTest::keyClick(m_window->numberEdit(), Qt::Key_Return);
         QTRY_COMPARE(m_server->lastCommand(), "accept");
+        m_server->sendEvent("CALL_ESTABLISHED");
+        QTRY_COMPARE(m_controller->callState(), CallState::Active);
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_1);
+        QTRY_COMPARE(m_window->numberEdit()->text(), "1");
 
         m_server->sendEvent("CALL_CLOSED");
         QTRY_COMPARE(m_controller->callState(), CallState::Idle);
+        QCOMPARE(m_window->numberEdit()->text(), ""); // nothing to restore after an incoming call
         m_server->sendEvent("CALL_INCOMING", {{"peeruri", "sip:bob@h"}});
         QTRY_COMPARE(m_controller->callState(), CallState::Incoming);
         QTest::keyClick(m_window->numberEdit(), Qt::Key_Escape);

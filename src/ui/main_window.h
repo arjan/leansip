@@ -41,6 +41,10 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
 
 private:
+    // Big digits by default; shrinks the font until the current text fits the field.
+    void fitNumberFont();
+    static constexpr int kNumberMaxPt = 30;
+    static constexpr int kNumberMinPt = 11;
     void buildUi(const AccountInfo &account);
     QWidget *buildHelpPage();
     bool handleKey(QKeyEvent *event);
@@ -62,6 +66,8 @@ private:
     QLabel *m_status = nullptr;
     QLabel *m_hint = nullptr;
     QString m_lastDialed;
+    bool m_outgoingCall = false; // current/last call was started by us: restore the number afterwards
+    CallController::CallState m_appliedState = CallController::CallState::Idle; // last state updateForState() saw
     QTimer m_elapsedTimer;
     QElapsedTimer m_callClock;
 };
