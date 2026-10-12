@@ -69,6 +69,135 @@ private slots:
         QCOMPARE(a->user, "first");
     }
 
+    void recordRoundTripPreservesUnknownParams()
+    {
+        const QString line = QStringLiteral(
+            R"("Alice Test" <sip:alice@example.com;transport=tcp>;auth_user=alice_auth;auth_pass=hunter2;outbound=sip:1.2.3.4;audio_codecs=opus/48000/2,PCMU/8000/1;regint=600)");
+        const auto r = AccountRecord::fromLine(line);
+        QVERIFY(r.has_value());
+        QCOMPARE(r->displayName, "Alice Test");
+        QCOMPARE(r->user, "alice");
+        QCOMPARE(r->domain, "example.com");
+        QCOMPARE(r->transport, "tcp");
+        QCOMPARE(r->authUser, "alice_auth");
+        QCOMPARE(r->password, "hunter2");
+        QCOMPARE(r->outbound, "sip:1.2.3.4");
+        QCOMPARE(r->extraParams, ";audio_codecs=opus/48000/2,PCMU/8000/1;regint=600");
+        QCOMPARE(r->aor(), "sip:alice@example.com");
+        QCOMPARE(r->toLine(), line);
+        QCOMPARE(r->info().label(), "Alice Test");
+
+        // Editing a modelled field keeps everything else intact.
+        AccountRecord edited = *r;
+        edited.password = "new";
+        QCOMPARE(edited.toLine(),
+                 R"("Alice Test" <sip:alice@example.com;transport=tcp>;auth_user=alice_auth;auth_pass=new;outbound=sip:1.2.3.4;audio_codecs=opus/48000/2,PCMU/8000/1;regint=600)");
+    }
+
+    void recordMinimalLine()
+    {
+        AccountRecord r;
+        r.user = "bob";
+        r.domain = "pbx.local";
+        QCOMPARE(r.toLine(), "<sip:bob@pbx.local>");
+        const auto back = AccountRecord::fromLine(r.toLine());
+        QVERIFY(back.has_value());
+        QCOMPARE(*back, r);
+        QCOMPARE(back->info().authUser, "bob");
+    }
+
+    void fileParseAndSerialize()
+    {
+        const QString contents = QStringLiteral(
+            "# baresip accounts\n"
+            "\n"
+            "<sip:first@a>;auth_pass=1\n"
+            "# a comment between accounts is dropped\n"
+            "\"Second\" <sip:second@b>;auth_pass=2\n"
+            "not an account line\n");
+        const AccountsFile f = accounts::parseFile(contents);
+        QCOMPARE(f.preamble, (QStringList{"# baresip accounts", ""}));
+        QCOMPARE(f.accounts.size(), 2);
+        QCOMPARE(f.accounts[0].user, "first");
+        QCOMPARE(f.accounts[1].displayName, "Second");
+        QCOMPARE(accounts::serialize(f),
+                 "# baresip accounts\n\n<sip:first@a>;auth_pass=1\n\"Second\" <sip:second@b>;auth_pass=2\n");
+
+        // Reordering is just list order.
+        AccountsFile swapped = f;
+        swapped.accounts.swapItemsAt(0, 1);
+        QVERIFY(accounts::serialize(swapped).startsWith("# baresip accounts\n\n\"Second\""));
+
+        QCOMPARE(accounts::parseFile(QString()), AccountsFile{});
+    }
+
+    void writeFileIsAtomicAndPrivate()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("sub/accounts");
+        AccountsFile f;
+        f.preamble = {"# header"};
+        AccountRecord r;
+        r.user = "u";
+        r.domain = "d";
+        r.password = "p";
+        f.accounts.append(r);
+
+        QString error;
+        QVERIFY2(accounts::writeFile(path, f, &error), qPrintable(error));
+        QFile written(path);
+        QVERIFY(written.open(QIODevice::ReadOnly));
+        QCOMPARE(QString::fromUtf8(written.readAll()), "# header\n<sip:u@d>;auth_pass=p\n");
+        const auto perms = QFileInfo(path).permissions();
+        QVERIFY(perms & QFileDevice::ReadOwner);
+        QVERIFY(!(perms & (QFileDevice::ReadGroup | QFileDevice::ReadOther | QFileDevice::WriteGroup | QFileDevice::WriteOther)));
+        QVERIFY(QDir(dir.filePath("sub")).entryList(QDir::Files | QDir::Hidden).size() == 1); // no temp file left
+
+        // Overwrite keeps working and reading back gives the same model.
+        f.accounts[0].password = "q";
+        QVERIFY(accounts::writeFile(path, f, &error));
+        AccountsFile back;
+        QVERIFY(accounts::readFile(path, &back, &error));
+        QCOMPARE(back, f);
+
+        AccountsFile missing;
+        QVERIFY(accounts::readFile(dir.filePath("nope"), &missing, &error));
+        QCOMPARE(missing, AccountsFile{});
+
+        QVERIFY(!accounts::writeFile("/proc/leansip/accounts", f, &error));
+        QVERIFY(!error.isEmpty());
+    }
+
+    void validateRecordRules()
+    {
+        AccountRecord r;
+        r.user = "alice";
+        r.domain = "example.com";
+        QString why;
+        QVERIFY(accounts::validateRecord(r, &why));
+
+        auto rejects = [&](auto mutate, const char *expect) {
+            AccountRecord bad = r;
+            mutate(bad);
+            QString e;
+            const bool ok = accounts::validateRecord(bad, &e);
+            QVERIFY2(!ok, expect);
+            QVERIFY2(e.contains(QLatin1String(expect)), qPrintable(e));
+        };
+        rejects([](AccountRecord &b) { b.user.clear(); }, "user is required");
+        rejects([](AccountRecord &b) { b.domain.clear(); }, "domain is required");
+        rejects([](AccountRecord &b) { b.password = "a b"; }, "password must not");
+        rejects([](AccountRecord &b) { b.user = "x;y"; }, "user must not");
+        rejects([](AccountRecord &b) { b.domain = "a@b"; }, "@");
+        rejects([](AccountRecord &b) { b.displayName = "say \"hi\""; }, "quotes");
+        rejects([](AccountRecord &b) { b.transport = "sctp"; }, "transport");
+        rejects([](AccountRecord &b) { b.outbound = "1.2.3.4"; }, "sip:");
+        r.transport = "tls";
+        r.outbound = "sip:proxy";
+        QVERIFY(accounts::validateRecord(r, &why));
+    }
+
     void loadFromFixture()
     {
         const QString dir = qEnvironmentVariable("LEANSIP_FIXTURES");
