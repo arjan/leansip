@@ -48,9 +48,13 @@ CallController::RegistrationState CallController::parseRegInfo(const QString &da
 {
     if (aor.isEmpty())
         return RegistrationState::Unknown;
-    // Lines look like: "> sip:user@host                   OK sip:server Expires 3600s"
+    // Lines look like: "0 - sip:user@host        \e[32mOK \e[;m kamailio (...) Expires 3706s"
+    // baresip colours the status, so strip ANSI escapes before tokenising.
+    static const QRegularExpression ansi(QStringLiteral("\x1b\\[[0-9;]*[A-Za-z]"));
     static const QRegularExpression ws(QStringLiteral("\\s+"));
-    const QStringList lines = data.split(u'\n');
+    QString plain = data;
+    plain.remove(ansi);
+    const QStringList lines = plain.split(u'\n');
     for (const QString &line : lines) {
         if (!line.contains(aor))
             continue;
@@ -166,6 +170,7 @@ void CallController::onResponse(const BaresipResponse &resp)
 {
     if (!m_seedToken.isEmpty() && resp.token == m_seedToken) {
         m_seedToken.clear();
+        qCDebug(lcCall) << "reginfo ok=" << resp.ok << "data=" << resp.data;
         if (!resp.ok) {
             qCInfo(lcCall) << "reginfo unavailable, waiting for register events:" << resp.data;
             return;
@@ -212,6 +217,7 @@ void CallController::setRegistration(RegistrationState state, const QString &det
         return;
     m_regState = state;
     m_regDetail = detail;
+    qCInfo(lcCall) << "registration:" << state << detail;
     emit registrationStateChanged(state, detail);
 }
 

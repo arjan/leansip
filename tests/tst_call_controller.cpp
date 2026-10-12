@@ -68,6 +68,12 @@ private slots:
         QCOMPARE(CallController::parseRegInfo("  sip:other@example.com OK\n", aor), RegState::Unknown);
         QCOMPARE(CallController::parseRegInfo("> sip:phone1@example.com   registering\n", aor), RegState::Unknown);
         QCOMPARE(CallController::parseRegInfo(ok, QString()), RegState::Unknown);
+        // Verbatim baresip 1.1.0 output: coloured status with ANSI escapes.
+        const QString real = QString::fromUtf8(
+            "\n--- User Agents (1) ---\n0 - sip:phone1@example.com                  \x1b[32mOK \x1b[;m kamailio (5.8.4 (x86_64/linux)) Expires 3706s\n\n");
+        QCOMPARE(CallController::parseRegInfo(real, aor), RegState::Registered);
+        const QString realErr = QString::fromUtf8("0 - sip:phone1@example.com   \x1b[31mERR \x1b[;m 401 Unauthorized\n");
+        QCOMPARE(CallController::parseRegInfo(realErr, aor), RegState::Failed);
         // "OK" must be a token, not a substring of e.g. a hostname.
         QCOMPARE(CallController::parseRegInfo("> sip:phone1@example.com  ERR sip:OKAY.host\n", aor), RegState::Failed);
     }
