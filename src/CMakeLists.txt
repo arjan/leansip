@@ -28,6 +28,8 @@ target_include_directories(leansip_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(leansip_core PUBLIC Qt6::Core Qt6::Network PRIVATE leansip_warnings)
 
 qt_add_library(leansip_ui STATIC
+    ui/accounts_dialog.cpp
+    ui/accounts_dialog.h
     ui/main_window.cpp
     ui/main_window.h
 )

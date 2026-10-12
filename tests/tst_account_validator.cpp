@@ -1,49 +1,10 @@
 #include "core/account_validator.h"
-#include "fake_baresip_server.h"
+#include "fake_backend.h"
 
 #include <QSignalSpy>
 #include <QtTest>
 
 using namespace leansip;
-
-// Stands in for BaresipProcess: every restart() brings up a fresh fake ctrl_tcp server.
-class FakeBackend : public BaresipBackend {
-public:
-    explicit FakeBackend(const QString &derivedAccounts)
-        : m_derivedAccounts(derivedAccounts)
-    {
-    }
-    bool restart() override
-    {
-        ++restarts;
-        if (failNextRestart) {
-            failNextRestart = false;
-            m_error = "simulated restart failure";
-            return false;
-        }
-        server = std::make_unique<FakeBaresipServer>();
-        return server->listen();
-    }
-    QString host() const override { return "127.0.0.1"; }
-    quint16 port() const override { return server ? server->port() : 0; }
-    QString derivedAccountsPath() const override { return m_derivedAccounts; }
-    void setAccountsOverride(bool enabled) override
-    {
-        overrideHistory.append(enabled);
-        overrideEnabled = enabled;
-    }
-    QString lastError() const override { return m_error; }
-
-    std::unique_ptr<FakeBaresipServer> server;
-    int restarts = 0;
-    bool failNextRestart = false;
-    bool overrideEnabled = false;
-    QList<bool> overrideHistory;
-
-private:
-    QString m_derivedAccounts;
-    QString m_error;
-};
 
 class TestAccountValidator : public QObject {
     Q_OBJECT
