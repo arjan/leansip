@@ -66,16 +66,25 @@ The `ctrl_tcp` interface has no authentication. Binding it to loopback keeps it
 off the network, but any process running as any user on the same machine can
 connect to it. This is the same trust level as the baresip console modules.
 
-## Build
+## Build (Ubuntu)
 
-Requires Qt 6.4+ (Core, Network, Widgets, Test), CMake 3.22+, a C++20 compiler and
-a `baresip` binary with the `ctrl_tcp` module (`baresip-core` on Debian/Ubuntu).
+Tested on Ubuntu 26.04 (Qt 6.10, baresip 1.1.0). Needs Qt 6.4+ and CMake 3.22+;
+`baresip-core` provides the `baresip` binary with the `ctrl_tcp` and `debug_cmd`
+modules used at runtime.
 
 ```
+sudo apt install build-essential cmake ninja-build qt6-base-dev baresip-core
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
 ./build/src/leansip
+```
+
+Run `baresip` once before the first start so it creates `~/.baresip/config`, and put
+your account in `~/.baresip/accounts`. To install system-wide:
+
+```
+sudo cmake --install build
 ```
 
 ## Layout
