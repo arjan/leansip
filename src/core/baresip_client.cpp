@@ -100,6 +100,7 @@ QString BaresipClient::sendCommand(const QString &command, const QString &params
     obj[QStringLiteral("params")] = params;
     obj[QStringLiteral("token")] = token;
     const QByteArray frame = netstring::encode(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    qCDebug(lcClient) << "send" << command << params << "token" << token;
     m_socket.write(frame);
     return token;
 }

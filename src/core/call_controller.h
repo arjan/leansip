@@ -38,6 +38,10 @@ public:
 
     static bool isValidNumber(const QString &number);
 
+    // Sound to play when an outgoing call closes before being answered, from baresip's close
+    // reason ("403 Forbidden", "486 Busy Here", ...). Empty when nothing should play.
+    static QString failureSound(const QString &closeReason);
+
 public slots:
     // Dials now when registered and idle; otherwise queues one number until registration succeeds.
     void dial(const QString &number);

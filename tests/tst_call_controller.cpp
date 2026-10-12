@@ -320,6 +320,48 @@ private slots:
         QCOMPARE(rig.server.lastParams(), "error.wav");
     }
 
+    void failureSoundMapping()
+    {
+        QCOMPARE(CallController::failureSound("403 Forbidden"), "error.wav");
+        QCOMPARE(CallController::failureSound("404 Not Found"), "error.wav");
+        QCOMPARE(CallController::failureSound("503 Service Unavailable"), "error.wav");
+        QCOMPARE(CallController::failureSound("486 Busy Here"), "busy.wav");
+        QCOMPARE(CallController::failureSound("603 Decline"), "busy.wav");
+        QCOMPARE(CallController::failureSound("487 Request Terminated"), QString());
+        QCOMPARE(CallController::failureSound("Connection reset by user"), QString());
+        QCOMPARE(CallController::failureSound(QString()), QString());
+    }
+
+    void rejectedOutgoingCallPlaysErrorTone()
+    {
+        Rig rig;
+        QVERIFY(rig.connectAndRegister());
+        QSignalSpy ended(&rig.controller, &CallController::callEnded);
+        rig.controller.dial("1");
+        QVERIFY(rig.waitCommands(2));
+        rig.server.sendResponse(rig.server.lastToken(), true);
+        rig.server.sendEvent("CALL_CLOSED", {{"param", "403 Forbidden\n"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Idle);
+        QCOMPARE(ended.first().first().toString(), "403 Forbidden");
+        QVERIFY(rig.waitCommands(3));
+        QCOMPARE(rig.server.lastCommand(), "play");
+        QCOMPARE(rig.server.lastParams(), "error.wav");
+    }
+
+    void establishedCallClosingIsSilent()
+    {
+        Rig rig;
+        QVERIFY(rig.connectAndRegister());
+        rig.controller.dial("1");
+        QVERIFY(rig.waitCommands(2));
+        rig.server.sendEvent("CALL_ESTABLISHED");
+        QTRY_COMPARE(rig.controller.callState(), CallState::Active);
+        rig.server.sendEvent("CALL_CLOSED", {{"param", "Connection reset by peer"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Idle);
+        QTest::qWait(50);
+        QCOMPARE(rig.server.received.size(), 2); // no play
+    }
+
     void hangupRejectedResetsToIdle()
     {
         // The UI believes a call is outgoing but baresip has none (its CALL_CLOSED was missed):

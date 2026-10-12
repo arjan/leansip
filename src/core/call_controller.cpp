@@ -36,6 +36,25 @@ bool CallController::isValidNumber(const QString &number)
     return re.match(number).hasMatch();
 }
 
+QString CallController::failureSound(const QString &closeReason)
+{
+    // Reasons without a SIP status code ("Connection reset by user") are local hangups: silent.
+    static const QRegularExpression code(QStringLiteral(R"(^\s*([1-6]\d\d)\b)"));
+    const auto m = code.match(closeReason);
+    if (!m.hasMatch())
+        return {};
+    switch (m.captured(1).toInt()) {
+    case 486: // Busy Here
+    case 600: // Busy Everywhere
+    case 603: // Decline
+        return QStringLiteral("busy.wav");
+    case 487: // Request Terminated: we cancelled it ourselves
+        return {};
+    default:
+        return dtmf::errorSoundFileName();
+    }
+}
+
 void CallController::onConnected()
 {
     m_backendAvailable = true;
@@ -162,8 +181,12 @@ void CallController::onEvent(const BaresipEvent &ev)
         setCallState(CallState::Active);
     } else if (t == QLatin1String("CALL_CLOSED")) {
         if (m_callState != CallState::Idle) {
+            // baresip's menu module stays silent on a rejected call, so signal it ourselves.
+            const QString sound = m_callState == CallState::Outgoing ? failureSound(ev.param) : QString();
             setCallState(CallState::Idle);
-            emit callEnded(ev.param);
+            emit callEnded(ev.param.trimmed());
+            if (!sound.isEmpty() && m_localTones && m_client->isConnected())
+                sendTracked(QStringLiteral("play"), sound);
         }
     } else if (t == QLatin1String("EXIT") || t == QLatin1String("SHUTDOWN")) {
         m_backendAvailable = false;
