@@ -63,7 +63,7 @@ MainWindow::MainWindow(const AccountInfo &account, CallController *controller, Q
 void MainWindow::buildUi(const AccountInfo &account)
 {
     setWindowTitle(QStringLiteral("leansip"));
-    setFixedWidth(320);
+    setFixedWidth(272);
     setObjectName(QStringLiteral("leansip"));
     // Frameless windows have no border of their own; draw a thin one so the edge is visible.
     setStyleSheet(QStringLiteral(
@@ -81,7 +81,7 @@ void MainWindow::buildUi(const AccountInfo &account)
 
     m_dialerPage = new QWidget(this);
     auto *root = new QVBoxLayout(m_dialerPage);
-    root->setContentsMargins(16, 4, 16, 4);
+    root->setContentsMargins(16, 10, 16, 10);
     root->setSpacing(4);
 
     // Centred "● account" line; the dot's colour is the registration state, details in its tooltip.
@@ -136,7 +136,7 @@ QWidget *MainWindow::buildHelpPage()
     auto *page = new QWidget(this);
     page->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored); // not counted while hidden
     auto *layout = new QVBoxLayout(page);
-    layout->setContentsMargins(16, 4, 16, 4);
+    layout->setContentsMargins(16, 10, 16, 10);
     auto *text = new QLabel(page);
     text->setObjectName(QStringLiteral("helpLabel"));
     text->setTextFormat(Qt::RichText);
