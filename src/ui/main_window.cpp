@@ -99,6 +99,7 @@ void MainWindow::buildUi(const AccountInfo &account)
 
     m_status = new QLabel(m_dialerPage);
     m_status->setObjectName(QStringLiteral("statusLabel"));
+    m_status->setAlignment(Qt::AlignCenter);
     m_status->setWordWrap(true);
     m_status->setMinimumHeight(m_status->fontMetrics().height() * 2);
     root->addWidget(m_status);

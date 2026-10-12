@@ -45,6 +45,7 @@ private slots:
     void numberFontIsBigAndShrinksToFit()
     {
         QCOMPARE(m_window->numberEdit()->alignment(), Qt::AlignCenter);
+        QCOMPARE(m_window->statusLabel()->alignment(), Qt::AlignCenter);
         QCOMPARE(m_window->numberEdit()->placeholderText(), "enter number");
         const int big = m_window->numberEdit()->font().pointSize();
         QVERIFY(big >= 24);
