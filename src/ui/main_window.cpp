@@ -74,20 +74,28 @@ void MainWindow::buildUi(const AccountInfo &account)
 
     m_pages = new QStackedLayout(this);
     m_pages->setContentsMargins(0, 0, 0, 0); // the pages carry their own margins
+    // Track the current page's height exactly. A stacked layout's hint is the max over all
+    // pages, which would size the dialer for the taller help page; the help page is therefore
+    // ignored for sizing until it is shown (see toggleHelp()).
+    m_pages->setSizeConstraint(QLayout::SetFixedSize);
 
     m_dialerPage = new QWidget(this);
     auto *root = new QVBoxLayout(m_dialerPage);
     root->setContentsMargins(16, 4, 16, 4);
     root->setSpacing(4);
 
+    // Centred "● account" line; the dot's colour is the registration state, details in its tooltip.
     auto *header = new QHBoxLayout;
+    header->setSpacing(6);
+    m_registration = new QLabel(m_dialerPage);
+    m_registration->setObjectName(QStringLiteral("registrationLabel"));
     m_accountLabel = new QLabel(account.label(), m_dialerPage);
     m_accountLabel->setToolTip(account.aor);
     m_accountLabel->setObjectName(QStringLiteral("accountLabel"));
-    m_registration = new QLabel(m_dialerPage);
-    m_registration->setObjectName(QStringLiteral("registrationLabel"));
-    header->addWidget(m_accountLabel, 1);
+    header->addStretch(1);
     header->addWidget(m_registration);
+    header->addWidget(m_accountLabel);
+    header->addStretch(1);
     root->addLayout(header);
 
     m_number = new QLineEdit(m_dialerPage);
@@ -126,8 +134,9 @@ void MainWindow::buildUi(const AccountInfo &account)
 QWidget *MainWindow::buildHelpPage()
 {
     auto *page = new QWidget(this);
+    page->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored); // not counted while hidden
     auto *layout = new QVBoxLayout(page);
-    layout->setContentsMargins(16, 6, 16, 6);
+    layout->setContentsMargins(16, 4, 16, 4);
     auto *text = new QLabel(page);
     text->setObjectName(QStringLiteral("helpLabel"));
     text->setTextFormat(Qt::RichText);
@@ -264,9 +273,11 @@ void MainWindow::escape()
 void MainWindow::toggleHelp()
 {
     if (isHelpVisible()) {
+        m_helpPage->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored);
         m_pages->setCurrentWidget(m_dialerPage);
         m_number->setFocus();
     } else {
+        m_helpPage->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred); // let it size the window
         m_pages->setCurrentWidget(m_helpPage);
         setFocus();
     }
@@ -369,8 +380,8 @@ void MainWindow::updateRegistration(CallController::RegistrationState state, con
         text = tr("connecting");
         break;
     }
-    m_registration->setText(QStringLiteral("<span style=\"color:%1\">●</span> %2").arg(colour, text));
-    m_registration->setToolTip(detail);
+    m_registration->setText(QStringLiteral("<span style=\"color:%1\">●</span>").arg(colour));
+    m_registration->setToolTip(detail.isEmpty() ? text : QStringLiteral("%1 — %2").arg(text, detail));
     updateForState(m_controller->callState());
 }
 

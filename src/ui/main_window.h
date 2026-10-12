@@ -57,7 +57,7 @@ private:
     // In a call the field shows the peer number dimmed; a sent DTMF digit flashes bright briefly.
     void showPeerNumber();
     void setNumberDim(bool dim);
-    static constexpr int kDtmfFlashMs = 200;
+    static constexpr int kDtmfFlashMs = 400;
 
     CallController *m_controller;
     QStackedLayout *m_pages = nullptr;

@@ -23,6 +23,6 @@ QByteArray wav(const QByteArray &pcm, int sampleRate);
 QString soundFileName(QChar key);
 
 // Writes one WAV per DTMF key into `dir` (created if needed). Returns false on the first I/O error.
-bool installSoundBank(const QString &dir, int durationMs = 120, int sampleRate = 8000);
+bool installSoundBank(const QString &dir, int durationMs = 400, int sampleRate = 8000);
 
 } // namespace leansip::dtmf

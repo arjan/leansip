@@ -103,7 +103,7 @@ private slots:
         QFile f(sounds + "/dtmf-7.wav");
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(f.read(4), QByteArray("RIFF"));
-        QCOMPARE(f.size(), 44 + 8000 * 120 / 1000 * 2);
+        QCOMPARE(f.size(), 44 + 8000 * 400 / 1000 * 2);
     }
 
     void installFailsOnUnwritablePath()

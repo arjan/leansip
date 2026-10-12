@@ -36,7 +36,9 @@ private slots:
     {
         QVERIFY(m_window->windowFlags().testFlag(Qt::FramelessWindowHint));
         QCOMPARE(m_window->findChild<QLabel *>("accountLabel")->text(), "Test Phone");
-        QVERIFY(m_window->registrationLabel()->text().contains("connecting"));
+        // The dot carries only its colour; the state text lives in the tooltip.
+        QVERIFY(!m_window->registrationLabel()->text().contains("connecting"));
+        QVERIFY(m_window->registrationLabel()->toolTip().contains("connecting"));
         QVERIFY(!m_window->isHelpVisible());
         QVERIFY(m_window->numberEdit()->hasFocus());
     }
@@ -64,6 +66,22 @@ private slots:
 
         m_window->numberEdit()->clear();
         QCOMPARE(m_window->numberEdit()->font().pointSize(), big); // grows back
+    }
+
+    void windowHeightFollowsCurrentPage()
+    {
+        // The dialer must not be sized for the (taller) hidden help page.
+        const QWidget *dialer = m_window->numberEdit()->parentWidget();
+        QCOMPARE(m_window->height(), dialer->sizeHint().height());
+        QVERIFY(m_window->height() < 200);
+        const int compact = m_window->height();
+
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_F1);
+        QVERIFY(m_window->isHelpVisible());
+        QTRY_VERIFY(m_window->height() > compact);
+
+        QTest::keyClick(m_window.get(), Qt::Key_Escape);
+        QTRY_COMPARE(m_window->height(), compact);
     }
 
     void typingGoesToNumberField()
@@ -94,7 +112,7 @@ private slots:
         QVERIFY(m_window->numberEdit()->property("dim").toBool());
         QVERIFY(!m_window->statusLabel()->text().contains("555"));
 
-        // A DTMF key sends the code plus a tone request and flashes the digit bright for ~200 ms.
+        // A DTMF key sends the code plus a tone request and flashes the digit bright for ~400 ms.
         QTest::keyClick(m_window->numberEdit(), Qt::Key_9);
         QTRY_COMPARE(m_server->received.size(), 4);
         QCOMPARE(m_server->received.at(2).value("command").toString(), "sndcode");
