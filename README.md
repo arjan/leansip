@@ -19,6 +19,19 @@ the open window and exits, so `leansip %u` works as a `tel:` URL handler.
 
 The UI shows the **first** account from `~/.baresip/accounts`.
 
+## Keys
+
+The window is frameless and entirely keyboard driven (drag anywhere to move it).
+
+| Key          | Action                                                   |
+|--------------|----------------------------------------------------------|
+| `0-9 * # +`  | type a number; sends DTMF during a call                  |
+| `Enter`      | call · answer                                            |
+| `Esc`        | hang up · decline · cancel queued dial · clear · quit when empty |
+| `↑`          | recall the last number dialled                           |
+| `?` / `F1`   | help screen (`Esc` closes it)                            |
+| `Ctrl+Q`     | quit                                                     |
+
 ## How it talks to baresip
 
 leansip never edits `~/.baresip`. On start it writes a derived config to

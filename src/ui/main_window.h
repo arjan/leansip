@@ -6,13 +6,18 @@
 #include <QElapsedTimer>
 #include <QLabel>
 #include <QLineEdit>
-#include <QPushButton>
+#include <QStackedLayout>
 #include <QTimer>
 #include <QWidget>
 
+class QKeyEvent;
+
 namespace leansip {
 
-// Minimal dialer: account line, number entry, keypad, contextual call buttons.
+// Frameless, keyboard-driven dialer. All interaction goes through handleKey():
+//   digits/*/#/+  type (idle) or send DTMF (active call)
+//   Enter         call / answer         Esc   hang up / decline / clear / quit
+//   Up            recall last number    ?/F1  help         Ctrl+Q  quit
 class MainWindow : public QWidget {
     Q_OBJECT
 public:
@@ -24,33 +29,39 @@ public:
 
     // Accessors for tests.
     QLineEdit *numberEdit() const { return m_number; }
-    QPushButton *callButton() const { return m_call; }
-    QPushButton *hangupButton() const { return m_hangup; }
-    QPushButton *answerButton() const { return m_answer; }
-    QPushButton *declineButton() const { return m_decline; }
     QLabel *statusLabel() const { return m_status; }
     QLabel *registrationLabel() const { return m_registration; }
-    QPushButton *keypadButton(QChar key) const { return m_keys.value(key); }
+    QLabel *hintLabel() const { return m_hint; }
+    bool isHelpVisible() const;
+    QString lastDialed() const { return m_lastDialed; }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
 
 private:
     void buildUi(const AccountInfo &account);
-    void onKey(QChar key);
-    void onCallClicked();
+    QWidget *buildHelpPage();
+    bool handleKey(QKeyEvent *event);
+    void startCall();
+    void escape();
+    void toggleHelp();
     void updateForState(CallController::CallState state);
     void updateRegistration(CallController::RegistrationState state, const QString &detail);
     void showError(const QString &message);
     void tickElapsed();
 
     CallController *m_controller;
+    QStackedLayout *m_pages = nullptr;
+    QWidget *m_dialerPage = nullptr;
+    QWidget *m_helpPage = nullptr;
     QLabel *m_accountLabel = nullptr;
     QLabel *m_registration = nullptr;
     QLineEdit *m_number = nullptr;
     QLabel *m_status = nullptr;
-    QPushButton *m_call = nullptr;
-    QPushButton *m_hangup = nullptr;
-    QPushButton *m_answer = nullptr;
-    QPushButton *m_decline = nullptr;
-    QHash<QChar, QPushButton *> m_keys;
+    QLabel *m_hint = nullptr;
+    QString m_lastDialed;
     QTimer m_elapsedTimer;
     QElapsedTimer m_callClock;
 };

@@ -21,6 +21,7 @@ private slots:
         account.aor = "sip:phone@example";
         m_window = std::make_unique<MainWindow>(account, m_controller.get());
         m_window->show();
+        QVERIFY(QTest::qWaitForWindowActive(m_window.get()));
     }
 
     void cleanup()
@@ -31,109 +32,140 @@ private slots:
         m_server.reset();
     }
 
-    void showsAccountAndStartsDisconnected()
+    void isFramelessAndShowsAccount()
     {
+        QVERIFY(m_window->windowFlags().testFlag(Qt::FramelessWindowHint));
         QCOMPARE(m_window->findChild<QLabel *>("accountLabel")->text(), "Test Phone");
         QVERIFY(m_window->registrationLabel()->text().contains("connecting"));
-        QVERIFY(m_window->callButton()->isVisible());
-        QVERIFY(!m_window->callButton()->isEnabled());
-        QVERIFY(!m_window->hangupButton()->isVisible());
-        QVERIFY(!m_window->answerButton()->isVisible());
+        QVERIFY(m_window->hintLabel()->text().contains("waiting for baresip"));
+        QVERIFY(!m_window->isHelpVisible());
+        QVERIFY(m_window->numberEdit()->hasFocus());
     }
 
-    void keypadAppendsToNumber()
+    void typingGoesToNumberField()
     {
-        QTest::mouseClick(m_window->keypadButton('1'), Qt::LeftButton);
-        QTest::mouseClick(m_window->keypadButton('2'), Qt::LeftButton);
-        QTest::mouseClick(m_window->keypadButton('#'), Qt::LeftButton);
+        QTest::keyClicks(m_window->numberEdit(), "12#+");
+        QCOMPARE(m_window->numberEdit()->text(), "12#+");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Backspace);
         QCOMPARE(m_window->numberEdit()->text(), "12#");
     }
 
-    void callEnabledOnlyWhenRegisteredAndNumberPresent()
-    {
-        m_window->numberEdit()->setText("123");
-        QVERIFY(!m_window->callButton()->isEnabled()); // backend not up
-
-        connectAndRegister();
-        QVERIFY(m_window->registrationLabel()->text().contains("registered"));
-        QVERIFY(m_window->callButton()->isEnabled());
-
-        m_window->numberEdit()->clear();
-        QVERIFY(!m_window->callButton()->isEnabled());
-    }
-
-    void callButtonDialsAndButtonsFollowState()
+    void enterDialsAndHintsFollowState()
     {
         connectAndRegister();
-        m_window->numberEdit()->setText("555");
-        QTest::mouseClick(m_window->callButton(), Qt::LeftButton);
+        QVERIFY(m_window->hintLabel()->text().contains("call"));
+        QTest::keyClicks(m_window->numberEdit(), "555");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Return);
 
         QTRY_COMPARE(m_server->received.size(), 2);
         QCOMPARE(m_server->lastCommand(), "dial");
         QCOMPARE(m_server->lastParams(), "555");
-        QVERIFY(!m_window->callButton()->isVisible());
-        QVERIFY(m_window->hangupButton()->isVisible());
         QVERIFY(m_window->numberEdit()->isReadOnly());
         QVERIFY(m_window->statusLabel()->text().contains("555"));
+        QVERIFY(m_window->hintLabel()->text().contains("hang up"));
 
         m_server->sendEvent("CALL_ESTABLISHED");
         QTRY_VERIFY(m_window->statusLabel()->text().contains("Connected"));
+        QVERIFY(m_window->hintLabel()->text().contains("dtmf"));
 
-        // Keypad sends DTMF instead of editing while active.
-        QTest::mouseClick(m_window->keypadButton('9'), Qt::LeftButton);
+        // Digits send DTMF instead of editing while active; other keys are swallowed.
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_9);
         QTRY_COMPARE(m_server->received.size(), 3);
         QCOMPARE(m_server->lastCommand(), "sndcode");
+        QCOMPARE(m_server->lastParams(), "9");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_A);
+        QTest::qWait(30);
+        QCOMPARE(m_server->received.size(), 3);
         QCOMPARE(m_window->numberEdit()->text(), "555");
 
-        QTest::mouseClick(m_window->hangupButton(), Qt::LeftButton);
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Escape);
         QTRY_COMPARE(m_server->received.size(), 4);
         QCOMPARE(m_server->lastCommand(), "hangup");
 
         m_server->sendEvent("CALL_CLOSED", {{"param", "Normal"}});
-        QTRY_VERIFY(m_window->callButton()->isVisible());
-        QVERIFY(!m_window->hangupButton()->isVisible());
-        QVERIFY(!m_window->numberEdit()->isReadOnly());
+        QTRY_VERIFY(!m_window->numberEdit()->isReadOnly());
         QCOMPARE(m_window->statusLabel()->text(), "Ended: Normal");
+        QCOMPARE(m_window->lastDialed(), "555");
     }
 
-    void enterKeyDials()
+    void upRecallsLastNumber()
     {
         connectAndRegister();
-        m_window->numberEdit()->setText("42");
-        QTest::keyClick(m_window->numberEdit(), Qt::Key_Return);
+        m_window->dialNumber("4242");
         QTRY_COMPARE(m_server->lastCommand(), "dial");
-        QCOMPARE(m_server->lastParams(), "42");
+        m_server->sendEvent("CALL_CLOSED");
+        QTRY_VERIFY(!m_window->numberEdit()->isReadOnly());
+
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Escape); // clear
+        QCOMPARE(m_window->numberEdit()->text(), "");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Up);
+        QCOMPARE(m_window->numberEdit()->text(), "4242");
     }
 
-    void incomingCallShowsAnswerDecline()
+    void escapeClearsThenCloses()
     {
-        connectAndRegister();
-        m_server->sendEvent("CALL_INCOMING", {{"peeruri", "sip:bob@h"}, {"peerdisplayname", "Bob"}});
-        QTRY_VERIFY(m_window->answerButton()->isVisible());
-        QVERIFY(m_window->declineButton()->isVisible());
-        QVERIFY(!m_window->callButton()->isVisible());
-        QVERIFY(m_window->statusLabel()->text().contains("Bob"));
-
-        QTest::mouseClick(m_window->answerButton(), Qt::LeftButton);
-        QTRY_COMPARE(m_server->lastCommand(), "accept");
+        QTest::keyClicks(m_window->numberEdit(), "1");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Escape);
+        QCOMPARE(m_window->numberEdit()->text(), "");
+        QVERIFY(m_window->isVisible());
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Escape);
+        QTRY_VERIFY(!m_window->isVisible());
     }
 
-    void dialNumberFillsFieldAndDials()
-    {
-        connectAndRegister();
-        m_window->dialNumber("31201234567");
-        QCOMPARE(m_window->numberEdit()->text(), "31201234567");
-        QTRY_COMPARE(m_server->lastCommand(), "dial");
-        QCOMPARE(m_server->lastParams(), "31201234567");
-    }
-
-    void dialNumberBeforeRegistrationShowsWaiting()
+    void escapeCancelsQueuedDial()
     {
         m_window->dialNumber("123");
         QVERIFY(m_controller->hasPendingDial());
         QVERIFY(m_window->statusLabel()->text().contains("Waiting"));
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Escape);
+        QVERIFY(!m_controller->hasPendingDial());
+        QVERIFY(m_window->isVisible());
+        QCOMPARE(m_window->numberEdit()->text(), "123"); // number kept for a retry
+    }
+
+    void ctrlQCloses()
+    {
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Q, Qt::ControlModifier);
+        QTRY_VERIFY(!m_window->isVisible());
+    }
+
+    void incomingCallEnterAnswersEscapeDeclines()
+    {
         connectAndRegister();
-        QTRY_COMPARE(m_server->lastCommand(), "dial");
+        m_server->sendEvent("CALL_INCOMING", {{"peeruri", "sip:bob@h"}, {"peerdisplayname", "Bob"}});
+        QTRY_VERIFY(m_window->statusLabel()->text().contains("Bob"));
+        QVERIFY(m_window->hintLabel()->text().contains("answer"));
+
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Return);
+        QTRY_COMPARE(m_server->lastCommand(), "accept");
+
+        m_server->sendEvent("CALL_CLOSED");
+        QTRY_COMPARE(m_controller->callState(), CallState::Idle);
+        m_server->sendEvent("CALL_INCOMING", {{"peeruri", "sip:bob@h"}});
+        QTRY_COMPARE(m_controller->callState(), CallState::Incoming);
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Escape);
+        QTRY_COMPARE(m_server->lastCommand(), "hangup");
+    }
+
+    void helpTogglesWithQuestionMarkAndF1()
+    {
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Question, Qt::ShiftModifier, 0);
+        QVERIFY(m_window->isHelpVisible());
+        QVERIFY(m_window->findChild<QLabel *>("helpLabel")->text().contains("Ctrl+Q"));
+        QCOMPARE(m_window->numberEdit()->text(), ""); // '?' never reached the field
+
+        // Ordinary keys are swallowed while help is up; Esc closes it instead of clearing/quitting.
+        QTest::keyClick(m_window.get(), Qt::Key_5);
+        QCOMPARE(m_window->numberEdit()->text(), "");
+        QTest::keyClick(m_window.get(), Qt::Key_Escape);
+        QVERIFY(!m_window->isHelpVisible());
+        QVERIFY(m_window->isVisible());
+        QVERIFY(m_window->numberEdit()->hasFocus());
+
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_F1);
+        QVERIFY(m_window->isHelpVisible());
+        QTest::keyClick(m_window.get(), Qt::Key_F1);
+        QVERIFY(!m_window->isHelpVisible());
     }
 
     void commandFailureIsShown()
@@ -143,17 +175,15 @@ private slots:
         QTRY_COMPARE(m_server->lastCommand(), "dial");
         m_server->sendResponse(m_server->lastToken(), false, "no route");
         QTRY_VERIFY(m_window->statusLabel()->text().contains("no route"));
-        QVERIFY(m_window->callButton()->isVisible());
+        QVERIFY(!m_window->numberEdit()->isReadOnly());
     }
 
-    void backendLossDisablesCalling()
+    void backendLossIsShown()
     {
         connectAndRegister();
-        m_window->numberEdit()->setText("1");
-        QVERIFY(m_window->callButton()->isEnabled());
         m_server->dropClient();
-        QTRY_VERIFY(!m_window->callButton()->isEnabled());
-        QVERIFY(m_window->statusLabel()->text().contains("lost"));
+        QTRY_VERIFY(m_window->statusLabel()->text().contains("lost"));
+        QVERIFY(m_window->hintLabel()->text().contains("waiting for baresip"));
     }
 
 private:
