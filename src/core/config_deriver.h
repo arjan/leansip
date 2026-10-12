@@ -27,7 +27,10 @@ struct Result {
 
 // Writes the derived config into `targetDir` (created 0700 if missing).
 // `userDir` is typically ~/.baresip; its `config` must exist (baresip creates it on first run).
-Result deriveDirectory(const QString &userDir, const QString &targetDir, const QString &listen);
+// With `linkAccounts == false` an existing `accounts` file in `targetDir` is left alone (used
+// while a candidate accounts file is being validated).
+Result deriveDirectory(const QString &userDir, const QString &targetDir, const QString &listen,
+                       bool linkAccounts = true);
 
 } // namespace config_deriver
 } // namespace leansip

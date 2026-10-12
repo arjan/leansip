@@ -97,7 +97,7 @@ QString deriveConfigText(const QString &userConfig, const QString &listen, const
     return out.join(u'\n');
 }
 
-Result deriveDirectory(const QString &userDir, const QString &targetDir, const QString &listen)
+Result deriveDirectory(const QString &userDir, const QString &targetDir, const QString &listen, bool linkAccounts)
 {
     const QDir user(userDir);
     if (!user.exists())
@@ -129,6 +129,8 @@ Result deriveDirectory(const QString &userDir, const QString &targetDir, const Q
         const QString dst = target.filePath(QLatin1String(name));
         if (!QFile::exists(src))
             continue;
+        if (!linkAccounts && QLatin1String(name) == QLatin1String("accounts"))
+            continue; // a candidate accounts file is in place; keep it
         if (!linkInto(src, dst))
             return {false, {}, {}, QStringLiteral("cannot link %1 -> %2").arg(dst, src)};
     }

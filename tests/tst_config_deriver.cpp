@@ -111,6 +111,22 @@ private slots:
         // Re-deriving must replace the existing links rather than fail.
         const auto again = config_deriver::deriveDirectory(user.path(), dir, QStringLiteral("127.0.0.1:6"));
         QVERIFY2(again.ok, qPrintable(again.error));
+
+        // A candidate accounts file (validation in progress) must survive a re-derive when asked.
+        QFile::remove(dir + "/accounts");
+        writeFile(dir + "/accounts", "<sip:candidate@x>;auth_pass=c\n");
+        const auto keep = config_deriver::deriveDirectory(user.path(), dir, QStringLiteral("127.0.0.1:7"), false);
+        QVERIFY2(keep.ok, qPrintable(keep.error));
+        QVERIFY(!QFileInfo(dir + "/accounts").isSymLink());
+        QFile cand(dir + "/accounts");
+        QVERIFY(cand.open(QIODevice::ReadOnly));
+        QVERIFY(cand.readAll().contains("candidate@x"));
+        QVERIFY(QFileInfo(dir + "/uuid").isSymLink()); // other links still refreshed
+
+        // ...and is replaced by the link again once the override is lifted.
+        const auto relink = config_deriver::deriveDirectory(user.path(), dir, QStringLiteral("127.0.0.1:8"), true);
+        QVERIFY2(relink.ok, qPrintable(relink.error));
+        QVERIFY(QFileInfo(dir + "/accounts").isSymLink());
     }
 
     void deriveDirectoryFailsWithoutUserConfig()

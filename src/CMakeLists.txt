@@ -12,6 +12,7 @@ qt_add_library(leansip_core STATIC
     core/baresip_event.h
     core/baresip_client.cpp
     core/baresip_client.h
+    core/baresip_backend.h
     core/baresip_process.cpp
     core/baresip_process.h
     core/call_controller.cpp
