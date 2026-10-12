@@ -170,13 +170,21 @@ private slots:
         rig.server.sendEvent("CALL_ESTABLISHED");
         QTRY_COMPARE(rig.controller.callState(), CallState::Active);
 
+        // A digit sends the RFC 2833 code and asks baresip to play our local feedback tone.
         rig.controller.sendDtmf('5');
-        QVERIFY(rig.waitCommands(3));
-        QCOMPARE(rig.server.lastCommand(), "sndcode");
-        QCOMPARE(rig.server.lastParams(), "5");
+        QVERIFY(rig.waitCommands(4));
+        QCOMPARE(rig.server.received.at(2).value("command").toString(), "sndcode");
+        QCOMPARE(rig.server.received.at(2).value("params").toString(), "5");
+        QCOMPARE(rig.server.lastCommand(), "play");
+        QCOMPARE(rig.server.lastParams(), "dtmf-5.wav");
+        // A missing tone file must never surface as a user-visible failure.
+        QSignalSpy failed(&rig.controller, &CallController::commandFailed);
+        rig.server.sendResponse(rig.server.lastToken(), false, "No such file or directory");
+        QTest::qWait(50);
+        QCOMPARE(failed.size(), 0);
 
         rig.controller.hangup();
-        QVERIFY(rig.waitCommands(4));
+        QVERIFY(rig.waitCommands(5));
         QCOMPARE(rig.server.lastCommand(), "hangup");
 
         rig.server.sendEvent("CALL_CLOSED", {{"param", "Connection reset by user"}});
@@ -325,10 +333,13 @@ private slots:
         rig.server.sendEvent("CALL_INCOMING", {{"peeruri", "sip:x@y"}});
         rig.server.sendEvent("CALL_ESTABLISHED");
         QTRY_COMPARE(rig.controller.callState(), CallState::Active);
+        rig.controller.setLocalTones(false);
         rig.controller.sendDtmf('z'); // not a DTMF digit
         rig.controller.sendDtmf('#');
         QVERIFY(rig.waitCommands(2));
-        QCOMPARE(rig.server.received.size(), 2);
+        QTest::qWait(30);
+        QCOMPARE(rig.server.received.size(), 2); // no play command when tones are off
+        QCOMPARE(rig.server.lastCommand(), "sndcode");
         QCOMPARE(rig.server.lastParams(), "#");
     }
 

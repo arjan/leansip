@@ -89,31 +89,42 @@ private slots:
         m_server->sendEvent("CALL_ESTABLISHED");
         QTRY_VERIFY(m_window->statusLabel()->text().contains("Connected"));
 
-        // In a call the field collects DTMF digits; other keys are swallowed.
-        QCOMPARE(m_window->numberEdit()->text(), "");
-        QCOMPARE(m_window->numberEdit()->placeholderText(), "dtmf");
+        // In a call the field keeps showing the peer, dimmed; the clock lives in the status line.
+        QCOMPARE(m_window->numberEdit()->text(), "555");
+        QVERIFY(m_window->numberEdit()->property("dim").toBool());
+        QVERIFY(!m_window->statusLabel()->text().contains("555"));
+
+        // A DTMF key sends the code plus a tone request and flashes the digit bright for ~200 ms.
         QTest::keyClick(m_window->numberEdit(), Qt::Key_9);
-        QTRY_COMPARE(m_server->received.size(), 3);
-        QCOMPARE(m_server->lastCommand(), "sndcode");
-        QCOMPARE(m_server->lastParams(), "9");
-        QTest::keyClick(m_window->numberEdit(), Qt::Key_NumberSign, Qt::ShiftModifier, 0);
         QTRY_COMPARE(m_server->received.size(), 4);
-        QCOMPARE(m_server->lastParams(), "#");
-        QTest::keyClick(m_window->numberEdit(), Qt::Key_A);
+        QCOMPARE(m_server->received.at(2).value("command").toString(), "sndcode");
+        QCOMPARE(m_server->received.at(2).value("params").toString(), "9");
+        QCOMPARE(m_server->lastCommand(), "play");
+        QCOMPARE(m_server->lastParams(), "dtmf-9.wav");
+        QCOMPARE(m_window->numberEdit()->text(), "9");
+        QVERIFY(!m_window->numberEdit()->property("dim").toBool());
+        QTRY_COMPARE(m_window->numberEdit()->text(), "555");
+        QVERIFY(m_window->numberEdit()->property("dim").toBool());
+
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_NumberSign, Qt::ShiftModifier, 0);
+        QTRY_COMPARE(m_server->received.size(), 6);
+        QCOMPARE(m_server->received.at(4).value("params").toString(), "#");
+        QCOMPARE(m_window->numberEdit()->text(), "#");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_A); // not DTMF: swallowed
         QTest::qWait(30);
-        QCOMPARE(m_server->received.size(), 4);
-        QCOMPARE(m_window->numberEdit()->text(), "9#");
+        QCOMPARE(m_server->received.size(), 6);
+        QTRY_COMPARE(m_window->numberEdit()->text(), "555");
 
         QTest::keyClick(m_window->numberEdit(), Qt::Key_Escape);
-        QTRY_COMPARE(m_server->received.size(), 5);
+        QTRY_COMPARE(m_server->received.size(), 7);
         QCOMPARE(m_server->lastCommand(), "hangup");
 
         m_server->sendEvent("CALL_CLOSED", {{"param", "Normal"}});
         QTRY_VERIFY(!m_window->numberEdit()->isReadOnly());
         QCOMPARE(m_window->statusLabel()->text(), "Ended: Normal");
         QCOMPARE(m_window->lastDialed(), "555");
-        QCOMPARE(m_window->numberEdit()->text(), "555"); // dialled number restored for a retry
-        QCOMPARE(m_window->numberEdit()->placeholderText(), "enter number");
+        QCOMPARE(m_window->numberEdit()->text(), "555"); // dialled number kept for a retry
+        QVERIFY(!m_window->numberEdit()->property("dim").toBool());
     }
 
     void upRecallsLastNumber()
@@ -167,12 +178,16 @@ private slots:
         QTRY_COMPARE(m_server->lastCommand(), "accept");
         m_server->sendEvent("CALL_ESTABLISHED");
         QTRY_COMPARE(m_controller->callState(), CallState::Active);
+        QCOMPARE(m_window->numberEdit()->text(), "Bob"); // peer shown dimmed during the call
+        QVERIFY(m_window->numberEdit()->property("dim").toBool());
         QTest::keyClick(m_window->numberEdit(), Qt::Key_1);
-        QTRY_COMPARE(m_window->numberEdit()->text(), "1");
+        QCOMPARE(m_window->numberEdit()->text(), "1");
+        QTRY_COMPARE(m_window->numberEdit()->text(), "Bob");
 
         m_server->sendEvent("CALL_CLOSED");
         QTRY_COMPARE(m_controller->callState(), CallState::Idle);
         QCOMPARE(m_window->numberEdit()->text(), ""); // nothing to restore after an incoming call
+        QVERIFY(!m_window->numberEdit()->property("dim").toBool());
         m_server->sendEvent("CALL_INCOMING", {{"peeruri", "sip:bob@h"}});
         QTRY_COMPARE(m_controller->callState(), CallState::Incoming);
         QTest::keyClick(m_window->numberEdit(), Qt::Key_Escape);

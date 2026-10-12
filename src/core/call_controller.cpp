@@ -1,5 +1,7 @@
 #include "call_controller.h"
 
+#include "dtmf_tone.h"
+
 #include <QLoggingCategory>
 #include <QRegularExpression>
 
@@ -123,6 +125,9 @@ void CallController::sendDtmf(QChar digit)
     if (!allowed.contains(digit))
         return;
     sendTracked(QStringLiteral("sndcode"), QString(digit));
+    // Local feedback tone via baresip's own player (debug_cmd `play`, resolved against audio_path).
+    if (m_localTones)
+        sendTracked(QStringLiteral("play"), dtmf::soundFileName(digit));
 }
 
 void CallController::onEvent(const BaresipEvent &ev)
@@ -196,6 +201,8 @@ void CallController::onResponse(const BaresipResponse &resp)
     if (resp.ok)
         return;
     qCWarning(lcCall) << "command" << command << "failed:" << resp.data;
+    if (command == QLatin1String("play"))
+        return; // a missing tone file is cosmetic; don't bother the user
     if (command == QLatin1String("dial") && m_callState == CallState::Outgoing) {
         setCallState(CallState::Idle);
         emit callEnded(resp.data.isEmpty() ? QStringLiteral("dial failed") : resp.data);

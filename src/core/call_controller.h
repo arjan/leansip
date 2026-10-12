@@ -22,6 +22,9 @@ public:
     // AOR of the account we track (used to pick our line out of `reginfo` output).
     void setAccountAor(const QString &aor) { m_accountAor = aor; }
 
+    // Ask baresip to play a local DTMF feedback tone for each digit sent (default on).
+    void setLocalTones(bool enabled) { m_localTones = enabled; }
+
     // Lenient parse of baresip's `reginfo` text. Returns Unknown when the account's line
     // is absent or the format is not recognised; events will then settle the state.
     static RegistrationState parseRegInfo(const QString &data, const QString &aor);
@@ -69,6 +72,7 @@ private:
     QString m_accountAor;
     QString m_seedToken; // in-flight `reginfo` issued on connect; failures are not user-facing
     bool m_backendAvailable = false;
+    bool m_localTones = true;
     QHash<QString, QString> m_inflight; // token -> command name
 };
 

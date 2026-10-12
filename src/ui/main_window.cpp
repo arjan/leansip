@@ -3,6 +3,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QStyle>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -38,7 +39,9 @@ MainWindow::MainWindow(const AccountInfo &account, CallController *controller, Q
     });
     connect(m_controller, &CallController::callEnded, this, [this](const QString &reason) {
         m_status->setText(reason.isEmpty() ? tr("Call ended") : tr("Ended: %1").arg(reason));
-        // The field held DTMF digits during the call; put the dialled number back for a retry.
+        // Back to normal editing: bright text, dialled number restored for a retry.
+        m_dtmfFlash.stop();
+        setNumberDim(false);
         m_number->setText(m_outgoingCall ? m_lastDialed : QString());
     });
     connect(m_controller, &CallController::commandFailed, this, [this](const QString &cmd, const QString &detail) {
@@ -49,6 +52,9 @@ MainWindow::MainWindow(const AccountInfo &account, CallController *controller, Q
 
     m_elapsedTimer.setInterval(1000);
     connect(&m_elapsedTimer, &QTimer::timeout, this, &MainWindow::tickElapsed);
+    m_dtmfFlash.setSingleShot(true);
+    m_dtmfFlash.setInterval(kDtmfFlashMs);
+    connect(&m_dtmfFlash, &QTimer::timeout, this, &MainWindow::showPeerNumber);
 
     updateRegistration(m_controller->registrationState(), m_controller->registrationDetail());
     updateForState(m_controller->callState());
@@ -63,13 +69,15 @@ void MainWindow::buildUi(const AccountInfo &account)
     setStyleSheet(QStringLiteral(
         "#leansip { border: 1px solid palette(mid); }"
         "QLabel#registrationLabel { color: palette(placeholder-text); }"
-        "QLineEdit#numberEdit { border: none; border-bottom: 1px solid palette(mid); background: transparent; padding: 4px 0; }"));
+        "QLineEdit#numberEdit { border: none; border-bottom: 1px solid palette(mid); background: transparent; padding: 4px 0; }"
+        "QLineEdit#numberEdit[dim=\"true\"] { color: palette(placeholder-text); }"));
 
     m_pages = new QStackedLayout(this);
+    m_pages->setContentsMargins(0, 0, 0, 0); // the pages carry their own margins
 
     m_dialerPage = new QWidget(this);
     auto *root = new QVBoxLayout(m_dialerPage);
-    root->setContentsMargins(16, 6, 16, 6);
+    root->setContentsMargins(16, 4, 16, 4);
     root->setSpacing(4);
 
     auto *header = new QHBoxLayout;
@@ -101,7 +109,7 @@ void MainWindow::buildUi(const AccountInfo &account)
     m_status->setObjectName(QStringLiteral("statusLabel"));
     m_status->setAlignment(Qt::AlignCenter);
     m_status->setWordWrap(true);
-    m_status->setMinimumHeight(m_status->fontMetrics().height() * 2);
+    m_status->setMinimumHeight(m_status->fontMetrics().height()); // reserve one line so the window doesn't jump
     root->addWidget(m_status);
 
 
@@ -206,7 +214,10 @@ bool MainWindow::handleKey(QKeyEvent *event)
 
     if (state == S::Active && isDtmf(event->text())) {
         m_controller->sendDtmf(event->text().at(0));
-        m_number->setText(m_number->text() + event->text()); // field is read-only to the user, so append ourselves
+        // Flash the digit bright, then fall back to the dimmed peer number.
+        m_number->setText(event->text());
+        setNumberDim(false);
+        m_dtmfFlash.start();
         return true;
     }
     // Typing is only meaningful while idle; during a call the field is read-only anyway.
@@ -325,8 +336,7 @@ void MainWindow::updateForState(CallController::CallState state)
         // Entering the call (not every refresh): the peer moves to the status line and the
         // field starts collecting DTMF digits.
         if (m_appliedState != S::Active) {
-            m_number->clear();
-            m_number->setPlaceholderText(tr("dtmf"));
+            showPeerNumber();
             m_callClock.start();
             m_elapsedTimer.start();
             tickElapsed();
@@ -371,7 +381,24 @@ void MainWindow::showError(const QString &message)
 
 void MainWindow::tickElapsed()
 {
-    m_status->setText(tr("Connected %1 · %2").arg(formatElapsed(m_callClock.elapsed()), m_controller->peer()));
+    // The peer is in the number field during a call; the status just carries the clock.
+    m_status->setText(tr("Connected %1").arg(formatElapsed(m_callClock.elapsed())));
+}
+
+void MainWindow::showPeerNumber()
+{
+    m_number->setText(m_controller->peer());
+    setNumberDim(true);
+}
+
+void MainWindow::setNumberDim(bool dim)
+{
+    if (m_number->property("dim").toBool() == dim)
+        return;
+    m_number->setProperty("dim", dim);
+    // Dynamic-property selectors only re-evaluate after a repolish.
+    m_number->style()->unpolish(m_number);
+    m_number->style()->polish(m_number);
 }
 
 } // namespace leansip

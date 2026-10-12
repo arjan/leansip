@@ -6,6 +6,8 @@ qt_add_library(leansip_core STATIC
     core/accounts_parser.h
     core/config_deriver.cpp
     core/config_deriver.h
+    core/dtmf_tone.cpp
+    core/dtmf_tone.h
     core/baresip_event.cpp
     core/baresip_event.h
     core/baresip_client.cpp

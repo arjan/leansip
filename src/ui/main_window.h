@@ -54,6 +54,10 @@ private:
     void updateRegistration(CallController::RegistrationState state, const QString &detail);
     void showError(const QString &message);
     void tickElapsed();
+    // In a call the field shows the peer number dimmed; a sent DTMF digit flashes bright briefly.
+    void showPeerNumber();
+    void setNumberDim(bool dim);
+    static constexpr int kDtmfFlashMs = 200;
 
     CallController *m_controller;
     QStackedLayout *m_pages = nullptr;
@@ -67,6 +71,7 @@ private:
     bool m_outgoingCall = false; // current/last call was started by us: restore the number afterwards
     CallController::CallState m_appliedState = CallController::CallState::Idle; // last state updateForState() saw
     QTimer m_elapsedTimer;
+    QTimer m_dtmfFlash;
     QElapsedTimer m_callClock;
 };
 

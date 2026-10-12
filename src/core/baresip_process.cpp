@@ -1,6 +1,7 @@
 #include "baresip_process.h"
 
 #include "config_deriver.h"
+#include "dtmf_tone.h"
 
 #include <QDir>
 #include <QHostAddress>
@@ -76,6 +77,8 @@ bool BaresipProcess::start(const QString &userDir, const QString &binary)
         return false;
     }
     m_derivedDir = derived.dir;
+    if (!dtmf::installSoundBank(derived.soundsDir))
+        qCWarning(lcProcess) << "could not write DTMF tones to" << derived.soundsDir << "- keys will be silent";
 
     const QString resolved = QStandardPaths::findExecutable(binary);
     if (resolved.isEmpty()) {
