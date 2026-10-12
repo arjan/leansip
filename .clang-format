@@ -1,0 +1,16 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 120
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterClass: false
+  AfterNamespace: false
+  AfterStruct: false
+  BeforeElse: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+PointerAlignment: Right
+ConstructorInitializerIndentWidth: 4
+BreakConstructorInitializers: BeforeComma
+NamespaceIndentation: None

@@ -1,0 +1,3 @@
+# Sample baresip accounts file for tests. Credentials are fake.
+"Fixture Phone" <sip:phone1@fixture.example;transport=udp>;auth_user=phone1;auth_pass=not-a-real-password;outbound=sip:127.0.0.1:5060
+<sip:second@fixture.example>;auth_pass=also-fake
