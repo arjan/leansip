@@ -15,6 +15,10 @@ std::optional<std::pair<int, int>> frequencies(QChar key);
 // Returns an empty array for a non-DTMF key.
 QByteArray samples(QChar key, int durationMs, int sampleRate);
 
+// ITU-T E.180 special information tone ("number not in service"): 950, 1400 and 1800 Hz
+// for 330 ms each, followed by a short silence. Signed 16-bit mono PCM.
+QByteArray sitSamples(int sampleRate);
+
 // Minimal RIFF/WAVE container around 16-bit mono PCM.
 QByteArray wav(const QByteArray &pcm, int sampleRate);
 
@@ -22,7 +26,16 @@ QByteArray wav(const QByteArray &pcm, int sampleRate);
 // "dtmf-star.wav", "dtmf-hash.wav". Empty for a non-DTMF key.
 QString soundFileName(QChar key);
 
-// Writes one WAV per DTMF key into `dir` (created if needed). Returns false on the first I/O error.
+// Name of the "invalid number" sound. baresip's menu module plays error.wav/notfound.wav itself
+// on failed outgoing calls, so the bank provides the SIT under both names.
+inline const QString &errorSoundFileName()
+{
+    static const QString name = QStringLiteral("error.wav");
+    return name;
+}
+
+// Writes one WAV per DTMF key plus the error sounds into `dir` (created if needed), replacing
+// any existing file or symlink of the same name. Returns false on the first I/O error.
 bool installSoundBank(const QString &dir, int durationMs = 400, int sampleRate = 8000);
 
 } // namespace leansip::dtmf

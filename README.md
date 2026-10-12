@@ -40,8 +40,10 @@ leansip never edits `~/.baresip`. On start it writes a derived config to
 - your `config` with the console UI modules (`stdio`, `cons`, `gtk`) removed,
 - `ctrl_tcp` enabled on `127.0.0.1:<random port>` (never `0.0.0.0`),
 - `audio_path` pointed at a private `sounds/` directory holding baresip's stock WAVs
-  (symlinked) plus 16 generated DTMF tones, which baresip plays locally via `debug_cmd`'s
-  `play` command whenever you send a digit,
+  (symlinked) plus generated tones: 16 DTMF digits, played via `debug_cmd`'s `play`
+  command whenever you send one, and an "invalid number" tone (the ITU special information
+  tone) written as `error.wav`/`notfound.wav` so baresip's own failed-call handling and
+  leansip's local rejections sound the same,
 - symlinks to your `accounts`, `contacts` and `uuid` so credentials stay in one place.
 
 It then runs `baresip -f <that dir>` and stops it on exit. Your password is never

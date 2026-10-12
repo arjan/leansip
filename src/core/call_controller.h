@@ -62,6 +62,8 @@ private:
     void setRegistration(RegistrationState state, const QString &detail);
     void setPeer(const QString &peer);
     void sendTracked(const QString &command, const QString &params = {});
+    // "Invalid number" tone for failures baresip itself never signals (local rejection, dial error).
+    void playErrorTone();
 
     BaresipClient *m_client;
     CallState m_callState = CallState::Idle;

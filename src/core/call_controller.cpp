@@ -84,6 +84,7 @@ void CallController::dial(const QString &number)
 {
     const QString trimmed = number.trimmed();
     if (!isValidNumber(trimmed)) {
+        playErrorTone();
         emit commandFailed(QStringLiteral("dial"), QStringLiteral("invalid number '%1'").arg(trimmed));
         return;
     }
@@ -204,10 +205,17 @@ void CallController::onResponse(const BaresipResponse &resp)
     if (command == QLatin1String("play"))
         return; // a missing tone file is cosmetic; don't bother the user
     if (command == QLatin1String("dial") && m_callState == CallState::Outgoing) {
+        playErrorTone();
         setCallState(CallState::Idle);
         emit callEnded(resp.data.isEmpty() ? QStringLiteral("dial failed") : resp.data);
     }
     emit commandFailed(command, resp.data);
+}
+
+void CallController::playErrorTone()
+{
+    if (m_localTones && m_client->isConnected())
+        sendTracked(QStringLiteral("play"), dtmf::errorSoundFileName());
 }
 
 void CallController::setCallState(CallState state)

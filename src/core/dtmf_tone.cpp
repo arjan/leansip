@@ -69,6 +69,36 @@ QByteArray samples(QChar key, int durationMs, int sampleRate)
     return out;
 }
 
+QByteArray sitSamples(int sampleRate)
+{
+    if (sampleRate <= 0)
+        return {};
+    constexpr int segmentMs = 330;
+    constexpr int tailMs = 300;
+    constexpr int tones[] = {950, 1400, 1800};
+    constexpr double amplitude = 0.5 * 32767.0;
+    const int perSegment = sampleRate * segmentMs / 1000;
+    const int ramp = sampleRate * 5 / 1000;
+    const double twoPi = 2.0 * std::numbers::pi;
+
+    QByteArray out;
+    out.reserve((3 * perSegment + sampleRate * tailMs / 1000) * 2);
+    for (const int hz : tones) {
+        for (int i = 0; i < perSegment; ++i) {
+            double env = 1.0;
+            if (i < ramp)
+                env = static_cast<double>(i) / ramp;
+            else if (i >= perSegment - ramp)
+                env = static_cast<double>(perSegment - 1 - i) / ramp;
+            const double v = env * amplitude * std::sin(twoPi * hz * i / sampleRate);
+            appendLe<qint16>(out, static_cast<qint16>(std::lround(v)));
+        }
+    }
+    for (int i = 0; i < sampleRate * tailMs / 1000; ++i)
+        appendLe<qint16>(out, 0);
+    return out;
+}
+
 QByteArray wav(const QByteArray &pcm, int sampleRate)
 {
     constexpr quint16 channels = 1;
@@ -104,19 +134,36 @@ QString soundFileName(QChar key)
     return QStringLiteral("dtmf-%1.wav").arg(key.toUpper());
 }
 
+namespace {
+
+// Replaces the target outright: writing through a symlink to baresip's stock file would fail.
+bool writeSound(const QString &path, const QByteArray &data)
+{
+    if (QFile::exists(path) || QFileInfo(path).isSymLink())
+        QFile::remove(path);
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    return file.write(data) == data.size();
+}
+
+} // namespace
+
 bool installSoundBank(const QString &dir, int durationMs, int sampleRate)
 {
     if (!QDir().mkpath(dir))
         return false;
+    const QDir target(dir);
     for (const char16_t k : kKeys) {
         if (k == u'\0')
             break;
         const QChar key(k);
-        QFile file(QDir(dir).filePath(soundFileName(key)));
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        if (!writeSound(target.filePath(soundFileName(key)), wav(samples(key, durationMs, sampleRate), sampleRate)))
             return false;
-        const QByteArray data = wav(samples(key, durationMs, sampleRate), sampleRate);
-        if (file.write(data) != data.size())
+    }
+    const QByteArray sit = wav(sitSamples(sampleRate), sampleRate);
+    for (const char *name : {"error.wav", "notfound.wav"}) {
+        if (!writeSound(target.filePath(QLatin1String(name)), sit))
             return false;
     }
     return true;

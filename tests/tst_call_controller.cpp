@@ -289,6 +289,10 @@ private slots:
         rig.controller.dial("bad number");
         QCOMPARE(failed.size(), 1);
         QCOMPARE(rig.controller.callState(), CallState::Idle);
+        // A locally rejected number gets the "invalid number" tone (baresip never sees it).
+        QVERIFY(rig.waitCommands(2));
+        QCOMPARE(rig.server.lastCommand(), "play");
+        QCOMPARE(rig.server.lastParams(), "error.wav");
 
         rig.controller.dial("1");
         rig.controller.dial("2");
@@ -310,6 +314,9 @@ private slots:
         QTRY_COMPARE(rig.controller.callState(), CallState::Idle);
         QCOMPARE(ended.first().first().toString(), "could not dial");
         QCOMPARE(failed.size(), 1);
+        QVERIFY(rig.waitCommands(3));
+        QCOMPARE(rig.server.lastCommand(), "play");
+        QCOMPARE(rig.server.lastParams(), "error.wav");
     }
 
     void unknownTokenResponseIsIgnored()

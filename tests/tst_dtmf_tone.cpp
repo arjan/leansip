@@ -62,6 +62,31 @@ private slots:
         QVERIFY(power(697) < power(770) / 100);
     }
 
+    void sitIsThreeRisingTones()
+    {
+        const int rate = 8000;
+        const QByteArray pcm = dtmf::sitSamples(rate);
+        const int seg = rate * 330 / 1000;
+        QCOMPARE(pcm.size(), (3 * seg + rate * 300 / 1000) * 2);
+        const auto *s = reinterpret_cast<const qint16 *>(pcm.constData());
+        auto power = [&](int offset, int hz) {
+            const double k = 2.0 * std::cos(2.0 * std::numbers::pi * hz / rate);
+            double q0 = 0, q1 = 0, q2 = 0;
+            for (int i = offset; i < offset + seg; ++i) {
+                q0 = k * q1 - q2 + s[i];
+                q2 = q1;
+                q1 = q0;
+            }
+            return q1 * q1 + q2 * q2 - k * q1 * q2;
+        };
+        QVERIFY(power(0, 950) > 100 * power(0, 1400));
+        QVERIFY(power(seg, 1400) > 100 * power(seg, 950));
+        QVERIFY(power(2 * seg, 1800) > 100 * power(2 * seg, 1400));
+        for (int i = 3 * seg; i < 3 * seg + rate * 300 / 1000; ++i)
+            QCOMPARE(s[i], 0); // trailing silence
+        QVERIFY(dtmf::sitSamples(0).isEmpty());
+    }
+
     void wavHeader()
     {
         const QByteArray pcm = dtmf::samples('1', 50, 8000);
@@ -88,22 +113,37 @@ private slots:
         QCOMPARE(dtmf::soundFileName('x'), QString());
     }
 
-    void installsSixteenFiles()
+    void installsToneBankAndErrorSounds()
     {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
         const QString sounds = dir.filePath("sounds");
+        QVERIFY(QDir().mkpath(sounds));
+        // A stock error.wav symlink (as config_deriver creates) must be replaced, not written through.
+        QFile stock(dir.filePath("stock-error.wav"));
+        QVERIFY(stock.open(QIODevice::WriteOnly));
+        stock.write("stock");
+        stock.close();
+        QVERIFY(QFile::link(stock.fileName(), sounds + "/error.wav"));
+
         QVERIFY(dtmf::installSoundBank(sounds));
         const QStringList files = QDir(sounds).entryList({"*.wav"}, QDir::Files);
-        QCOMPARE(files.size(), 16);
+        QCOMPARE(files.size(), 18);
         QVERIFY(files.contains("dtmf-0.wav"));
         QVERIFY(files.contains("dtmf-star.wav"));
         QVERIFY(files.contains("dtmf-hash.wav"));
         QVERIFY(files.contains("dtmf-D.wav"));
+        QVERIFY(files.contains("error.wav"));
+        QVERIFY(files.contains("notfound.wav"));
         QFile f(sounds + "/dtmf-7.wav");
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(f.read(4), QByteArray("RIFF"));
         QCOMPARE(f.size(), 44 + 8000 * 400 / 1000 * 2);
+
+        QVERIFY(!QFileInfo(sounds + "/error.wav").isSymLink());
+        QCOMPARE(QFileInfo(sounds + "/error.wav").size(), QFileInfo(sounds + "/notfound.wav").size());
+        QCOMPARE(QFile(stock.fileName()).size(), 5); // the stock file was left untouched
+        QCOMPARE(dtmf::errorSoundFileName(), "error.wav");
     }
 
     void installFailsOnUnwritablePath()
