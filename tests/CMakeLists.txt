@@ -13,6 +13,7 @@ endfunction()
 
 leansip_add_test(tst_netstring)
 leansip_add_test(tst_accounts_parser)
+leansip_add_test(tst_account_validator)
 leansip_add_test(tst_config_deriver)
 leansip_add_test(tst_dtmf_tone)
 leansip_add_test(tst_baresip_event)

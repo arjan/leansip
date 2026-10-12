@@ -4,6 +4,8 @@ qt_add_library(leansip_core STATIC
     core/netstring.h
     core/accounts_parser.cpp
     core/accounts_parser.h
+    core/account_validator.cpp
+    core/account_validator.h
     core/config_deriver.cpp
     core/config_deriver.h
     core/dtmf_tone.cpp
