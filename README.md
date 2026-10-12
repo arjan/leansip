@@ -14,8 +14,16 @@ leansip --connect 127.0.0.1:4444   # attach to a baresip you started yourself
 leansip --baresip-dir ~/other-baresip
 ```
 
-Only one instance runs per user. A second invocation with a number hands it to
-the open window and exits, so `leansip %u` works as a `tel:` URL handler.
+Only one instance runs per user. A second invocation hands its number (or just a
+"raise" request) to the open window and exits, so `leansip %u` works as a `tel:`
+URL handler.
+
+On Wayland a window may only take focus with an activation token, which the
+launcher passes to the *new* process as `XDG_ACTIVATION_TOKEN`. leansip forwards
+that token to the running instance, so launches from the app grid, a `.desktop`
+file or `gio open tel:…` bring the dialer to the front. A plain terminal launch
+carries no token; the compositor then flags the window ("leansip is ready")
+instead of focusing it.
 
 The UI shows the **first** account from `~/.baresip/accounts`.
 

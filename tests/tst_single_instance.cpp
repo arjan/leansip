@@ -13,6 +13,28 @@ private slots:
     {
         m_name = QStringLiteral("leansip-test-%1-%2").arg(QCoreApplication::applicationPid()).arg(++m_counter);
         QLocalServer::removeServer(m_name);
+        qunsetenv("XDG_ACTIVATION_TOKEN");
+    }
+
+    void wireFormatRoundTrip()
+    {
+        QString number;
+        QString token;
+        SingleInstance::decodeMessage(SingleInstance::encodeMessage("0612345678", "tok-123"), number, token);
+        QCOMPARE(number, "0612345678");
+        QCOMPARE(token, "tok-123");
+
+        SingleInstance::decodeMessage(SingleInstance::encodeMessage("", ""), number, token);
+        QVERIFY(number.isEmpty());
+        QVERIFY(token.isEmpty());
+
+        // Old-style frame without a tab still yields the number.
+        SingleInstance::decodeMessage("42\n", number, token);
+        QCOMPARE(number, "42");
+        QVERIFY(token.isEmpty());
+
+        // Separators inside the fields are stripped rather than corrupting the frame.
+        QCOMPARE(SingleInstance::encodeMessage("1\t2\n3", "a\tb"), QByteArray("123\tab\n"));
     }
 
     void forwardFailsWhenNobodyListens()
@@ -21,14 +43,14 @@ private slots:
         QVERIFY(!second.tryForward("123", 200));
     }
 
-    void primaryReceivesForwardedNumber()
+    void primaryReceivesForwardedNumberAndToken()
     {
         SingleInstance primary(m_name);
         QVERIFY(primary.listen());
         QSignalSpy received(&primary, &SingleInstance::numberReceived);
 
-        // tryForward blocks on the ack, so the primary must process events on another thread
-        // or we drive it from a timer: simplest is a QThread for the secondary.
+        // tryForward blocks on the ack, so the primary must process events on another thread.
+        qputenv("XDG_ACTIVATION_TOKEN", "launcher-token");
         bool acked = false;
         QThread worker;
         QObject starter;
@@ -41,7 +63,8 @@ private slots:
         worker.start();
 
         QTRY_COMPARE(received.size(), 1);
-        QCOMPARE(received.first().first().toString(), "0612345678");
+        QCOMPARE(received.first().at(0).toString(), "0612345678");
+        QCOMPARE(received.first().at(1).toString(), "launcher-token");
         QVERIFY(worker.wait(3000));
         QVERIFY(acked);
     }
@@ -63,20 +86,14 @@ private slots:
         worker.start();
 
         QTRY_COMPARE(received.size(), 1);
-        QVERIFY(received.first().first().toString().isEmpty());
+        QVERIFY(received.first().at(0).toString().isEmpty());
+        QVERIFY(received.first().at(1).toString().isEmpty()); // no token in this environment
         QVERIFY(worker.wait(3000));
     }
 
     void staleSocketIsReclaimed()
     {
-        // Simulate a crashed primary: a server that listened and was abandoned without close().
-        {
-            QLocalServer stale;
-            QVERIFY(stale.listen(m_name));
-            // Destructor closes the server but QLocalServer removes the file; emulate a left-over by
-            // recreating the path afterwards.
-        }
-        QFile::remove(QDir::temp().filePath(m_name));
+        // Simulate a crashed primary that left its socket file behind.
         QFile leftover(QDir::temp().filePath(m_name));
         QVERIFY(leftover.open(QIODevice::WriteOnly));
         leftover.close();

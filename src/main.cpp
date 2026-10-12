@@ -124,7 +124,12 @@ int main(int argc, char *argv[])
         client.connectToHost(process.host(), process.port());
     }
 
-    QObject::connect(&instance, &SingleInstance::numberReceived, &window, [&](const QString &n) {
+    QObject::connect(&instance, &SingleInstance::numberReceived, &window,
+                     [&](const QString &n, const QString &activationToken) {
+        // QtWayland consumes XDG_ACTIVATION_TOKEN from the environment on activateWindow();
+        // without a token the compositor refuses focus to an already-running app.
+        if (!activationToken.isEmpty())
+            qputenv("XDG_ACTIVATION_TOKEN", activationToken.toUtf8());
         if (n.isEmpty())
             window.raiseWindow();
         else
@@ -140,7 +145,7 @@ int main(int argc, char *argv[])
         process.stop();
     });
 
-    window.show();
+    window.raiseWindow(); // show + request focus (uses the launcher's activation token, if any)
     if (!number.isEmpty())
         window.dialNumber(number);
 

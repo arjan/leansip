@@ -10,7 +10,7 @@ Q_LOGGING_CATEGORY(lcInstance, "leansip.instance")
 namespace leansip {
 
 namespace {
-constexpr qint64 kMaxMessage = 512;
+constexpr qint64 kMaxMessage = 1024;
 }
 
 SingleInstance::SingleInstance(const QString &name, QObject *parent)
@@ -27,16 +27,35 @@ QString SingleInstance::defaultName()
     return QStringLiteral("leansip-%1").arg(::getuid());
 }
 
+QByteArray SingleInstance::encodeMessage(const QString &number, const QString &activationToken)
+{
+    // Neither field may legitimately contain a tab or newline; strip them so the frame stays sane.
+    auto clean = [](QString s) {
+        s.remove(u'\t');
+        s.remove(u'\n');
+        return s.toUtf8();
+    };
+    return clean(number) + '\t' + clean(activationToken) + '\n';
+}
+
+void SingleInstance::decodeMessage(const QByteArray &line, QString &number, QString &activationToken)
+{
+    const QByteArray trimmed = line.trimmed();
+    const qsizetype tab = trimmed.indexOf('\t');
+    number = QString::fromUtf8(tab < 0 ? trimmed : trimmed.left(tab)).trimmed();
+    activationToken = tab < 0 ? QString() : QString::fromUtf8(trimmed.mid(tab + 1)).trimmed();
+}
+
 bool SingleInstance::tryForward(const QString &number, int timeoutMs)
 {
     QLocalSocket socket;
     socket.connectToServer(m_name);
     if (!socket.waitForConnected(timeoutMs))
         return false;
-    socket.write(number.toUtf8() + '\n');
+    socket.write(encodeMessage(number, qEnvironmentVariable("XDG_ACTIVATION_TOKEN")));
     socket.flush();
     socket.waitForBytesWritten(timeoutMs);
-    // Wait for the ack so the primary has definitely read the number before we exit.
+    // Wait for the ack so the primary has definitely read the message before we exit.
     socket.waitForReadyRead(timeoutMs);
     const bool acked = socket.readAll().startsWith("ok");
     socket.disconnectFromServer();
@@ -67,11 +86,13 @@ void SingleInstance::onNewConnection()
                     conn->abort();
                 return;
             }
-            const QString number = QString::fromUtf8(conn->readLine(kMaxMessage)).trimmed();
+            QString number;
+            QString token;
+            decodeMessage(conn->readLine(kMaxMessage), number, token);
             conn->write("ok\n");
             conn->flush();
             conn->disconnectFromServer();
-            emit numberReceived(number);
+            emit numberReceived(number, token);
         });
         connect(conn, &QLocalSocket::disconnected, conn, &QObject::deleteLater);
     }
