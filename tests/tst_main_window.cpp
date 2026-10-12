@@ -37,7 +37,6 @@ private slots:
         QVERIFY(m_window->windowFlags().testFlag(Qt::FramelessWindowHint));
         QCOMPARE(m_window->findChild<QLabel *>("accountLabel")->text(), "Test Phone");
         QVERIFY(m_window->registrationLabel()->text().contains("connecting"));
-        QVERIFY(m_window->hintLabel()->text().contains("waiting for baresip"));
         QVERIFY(!m_window->isHelpVisible());
         QVERIFY(m_window->numberEdit()->hasFocus());
     }
@@ -78,7 +77,6 @@ private slots:
     void enterDialsAndHintsFollowState()
     {
         connectAndRegister();
-        QVERIFY(m_window->hintLabel()->text().contains("call"));
         QTest::keyClicks(m_window->numberEdit(), "555");
         QTest::keyClick(m_window->numberEdit(), Qt::Key_Return);
 
@@ -87,11 +85,9 @@ private slots:
         QCOMPARE(m_server->lastParams(), "555");
         QVERIFY(m_window->numberEdit()->isReadOnly());
         QVERIFY(m_window->statusLabel()->text().contains("555"));
-        QVERIFY(m_window->hintLabel()->text().contains("hang up"));
 
         m_server->sendEvent("CALL_ESTABLISHED");
         QTRY_VERIFY(m_window->statusLabel()->text().contains("Connected"));
-        QVERIFY(m_window->hintLabel()->text().contains("dtmf"));
 
         // In a call the field collects DTMF digits; other keys are swallowed.
         QCOMPARE(m_window->numberEdit()->text(), "");
@@ -166,7 +162,6 @@ private slots:
         connectAndRegister();
         m_server->sendEvent("CALL_INCOMING", {{"peeruri", "sip:bob@h"}, {"peerdisplayname", "Bob"}});
         QTRY_VERIFY(m_window->statusLabel()->text().contains("Bob"));
-        QVERIFY(m_window->hintLabel()->text().contains("answer"));
 
         QTest::keyClick(m_window->numberEdit(), Qt::Key_Return);
         QTRY_COMPARE(m_server->lastCommand(), "accept");
@@ -220,7 +215,6 @@ private slots:
         connectAndRegister();
         m_server->dropClient();
         QTRY_VERIFY(m_window->statusLabel()->text().contains("lost"));
-        QVERIFY(m_window->hintLabel()->text().contains("waiting for baresip"));
     }
 
 private:

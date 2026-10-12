@@ -62,7 +62,7 @@ void MainWindow::buildUi(const AccountInfo &account)
     // Frameless windows have no border of their own; draw a thin one so the edge is visible.
     setStyleSheet(QStringLiteral(
         "#leansip { border: 1px solid palette(mid); }"
-        "QLabel#hintLabel, QLabel#registrationLabel { color: palette(placeholder-text); }"
+        "QLabel#registrationLabel { color: palette(placeholder-text); }"
         "QLineEdit#numberEdit { border: none; border-bottom: 1px solid palette(mid); background: transparent; padding: 4px 0; }"));
 
     m_pages = new QStackedLayout(this);
@@ -104,9 +104,6 @@ void MainWindow::buildUi(const AccountInfo &account)
     m_status->setMinimumHeight(m_status->fontMetrics().height() * 2);
     root->addWidget(m_status);
 
-    m_hint = new QLabel(m_dialerPage);
-    m_hint->setObjectName(QStringLiteral("hintLabel"));
-    root->addWidget(m_hint);
 
     m_helpPage = buildHelpPage();
 
@@ -314,23 +311,15 @@ void MainWindow::updateForState(CallController::CallState state)
     case S::Idle:
         m_elapsedTimer.stop();
         m_number->setPlaceholderText(tr("enter number"));
-        if (m_controller->hasPendingDial()) {
+        if (m_controller->hasPendingDial())
             m_status->setText(tr("Waiting for registration…"));
-            m_hint->setText(tr("esc cancel  ·  ? help"));
-        } else if (!m_controller->backendAvailable()) {
-            m_hint->setText(tr("waiting for baresip  ·  ? help"));
-        } else {
-            m_hint->setText(tr("⏎ call  ·  ↑ redial  ·  esc clear  ·  ? help"));
-        }
         break;
     case S::Outgoing:
         m_status->setText(tr("Calling %1…").arg(m_controller->peer()));
-        m_hint->setText(tr("esc hang up"));
         break;
     case S::Incoming:
         m_outgoingCall = false;
         m_status->setText(tr("Incoming: %1").arg(m_controller->peer()));
-        m_hint->setText(tr("⏎ answer  ·  esc decline"));
         break;
     case S::Active:
         // Entering the call (not every refresh): the peer moves to the status line and the
@@ -342,7 +331,6 @@ void MainWindow::updateForState(CallController::CallState state)
             m_elapsedTimer.start();
             tickElapsed();
         }
-        m_hint->setText(tr("0-9 * # dtmf  ·  esc hang up"));
         break;
     }
     m_appliedState = state;

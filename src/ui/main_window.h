@@ -31,7 +31,6 @@ public:
     QLineEdit *numberEdit() const { return m_number; }
     QLabel *statusLabel() const { return m_status; }
     QLabel *registrationLabel() const { return m_registration; }
-    QLabel *hintLabel() const { return m_hint; }
     bool isHelpVisible() const;
     QString lastDialed() const { return m_lastDialed; }
 
@@ -64,7 +63,6 @@ private:
     QLabel *m_registration = nullptr;
     QLineEdit *m_number = nullptr;
     QLabel *m_status = nullptr;
-    QLabel *m_hint = nullptr;
     QString m_lastDialed;
     bool m_outgoingCall = false; // current/last call was started by us: restore the number afterwards
     CallController::CallState m_appliedState = CallController::CallState::Idle; // last state updateForState() saw
