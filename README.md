@@ -38,7 +38,28 @@ The window is frameless and entirely keyboard driven (drag anywhere to move it).
 | `Esc`        | hang up · decline · cancel queued dial · clear · quit when empty |
 | `↑`          | recall the last number dialled                           |
 | `?` / `F1`   | help screen (`Esc` closes it)                            |
+| `F2`         | accounts screen (see below)                              |
 | `Ctrl+Q`     | quit                                                     |
+
+### Accounts screen (F2)
+
+Edits `~/.baresip/accounts`. The list is the file order and the **first entry is the
+account the dialer uses**, so switching accounts is just moving one to the top.
+
+| Key              | Action                                                        |
+|------------------|---------------------------------------------------------------|
+| `↑` `↓`          | select an account; the form below edits it                    |
+| `Enter`          | make the selected account active (moves it to the top)        |
+| `Ctrl+↑` `Ctrl+↓`| move the selected account                                     |
+| `Ctrl+N` / `Del` | add / remove an account                                       |
+| `Ctrl+H`         | show or hide the password                                     |
+| `Ctrl+S`         | save: the edited file is handed to a restarted baresip and the active account must actually register; only then is `~/.baresip/accounts` rewritten |
+| `Esc`            | abort a running validation, or close discarding changes       |
+
+Fields: display name, user, domain, transport, auth user, password, outbound proxy. Anything
+else already on an account line (codecs, `regint`, …) is kept verbatim. The screen opens by
+itself when there is no account yet. Saving is refused during a call, because validation
+restarts baresip.
 
 ## How it talks to baresip
 
@@ -80,8 +101,9 @@ ctest --test-dir build --output-on-failure
 ./build/src/leansip
 ```
 
-Run `baresip` once before the first start so it creates `~/.baresip/config`, and put
-your account in `~/.baresip/accounts`. To install system-wide:
+On a machine without `~/.baresip`, leansip lets baresip write its template config on
+first start and then opens the accounts screen so you can enter your SIP account. To
+install system-wide:
 
 ```
 sudo cmake --install build

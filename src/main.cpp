@@ -1,15 +1,19 @@
+#include "core/account_validator.h"
 #include "core/accounts_parser.h"
 #include "core/baresip_client.h"
 #include "core/baresip_process.h"
 #include "core/call_controller.h"
 #include "core/single_instance.h"
 #include "core/unix_signals.h"
+#include "ui/accounts_dialog.h"
 #include "ui/main_window.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
 #include <QMessageBox>
+#include <QPointer>
+#include <QTimer>
 #include <QUrl>
 
 #include <csignal>
@@ -43,6 +47,15 @@ std::optional<Endpoint> parseEndpoint(const QString &spec)
     if (!ok || port == 0 || port > 65535)
         return std::nullopt;
     return Endpoint{spec.left(colon), static_cast<quint16>(port)};
+}
+
+AccountInfo firstAccountOrPlaceholder(const AccountsFile &file)
+{
+    if (!file.accounts.isEmpty())
+        return file.accounts.first().info();
+    AccountInfo none;
+    none.displayName = QObject::tr("no account — press F2");
+    return none;
 }
 
 } // namespace
@@ -87,16 +100,29 @@ int main(int argc, char *argv[])
         std::fputs("leansip: single-instance socket unavailable; continuing without it\n", stderr);
 
     const QString baresipDir = parser.value(dirOpt);
-    const auto loaded = accounts::loadFirst(QDir(baresipDir).filePath(QStringLiteral("accounts")));
-    if (!loaded.account) {
-        QMessageBox::critical(nullptr, QStringLiteral("leansip"), loaded.error);
+    const bool spawn = !parser.isSet(connectOpt);
+    if (spawn) {
+        // First run on a fresh machine: let baresip lay down its template config.
+        QString error;
+        if (!BaresipProcess::ensureUserConfig(baresipDir, &error)) {
+            QMessageBox::critical(nullptr, QStringLiteral("leansip"), error);
+            return 1;
+        }
+    }
+
+    const QString accountsPath = QDir(baresipDir).filePath(QStringLiteral("accounts"));
+    AccountsFile accountsFile;
+    QString loadError;
+    if (!accounts::readFile(accountsPath, &accountsFile, &loadError)) {
+        QMessageBox::critical(nullptr, QStringLiteral("leansip"), loadError);
         return 1;
     }
+    const AccountInfo initialAccount = firstAccountOrPlaceholder(accountsFile);
 
     BaresipClient client;
     CallController controller(&client);
-    controller.setAccountAor(loaded.account->aor);
-    MainWindow window(*loaded.account, &controller);
+    controller.setAccountAor(accountsFile.accounts.isEmpty() ? QString() : initialAccount.aor);
+    MainWindow window(initialAccount, &controller);
 
     // Ctrl-C / SIGTERM must still run aboutToQuit so the child baresip is stopped cleanly.
     UnixSignalBridge signalBridge;
@@ -104,7 +130,8 @@ int main(int argc, char *argv[])
         QObject::connect(&signalBridge, &UnixSignalBridge::signalReceived, &app, [] { QApplication::quit(); });
 
     BaresipProcess process;
-    if (parser.isSet(connectOpt)) {
+    std::unique_ptr<AccountValidator> validator;
+    if (!spawn) {
         const auto endpoint = parseEndpoint(parser.value(connectOpt));
         if (!endpoint) {
             std::fputs("leansip: --connect expects host:port\n", stderr);
@@ -122,7 +149,43 @@ int main(int argc, char *argv[])
                 window.statusLabel()->setText(QStringLiteral("baresip exited (code %1)").arg(code));
         });
         client.connectToHost(process.host(), process.port());
+        validator = std::make_unique<AccountValidator>(&process, &client, accountsPath);
     }
+
+    // F2: the accounts editor. Only one at a time; it needs the spawned baresip to validate.
+    QPointer<AccountsDialog> dialog;
+    auto openAccounts = [&] {
+        if (dialog) {
+            dialog->raise();
+            dialog->activateWindow();
+            return;
+        }
+        if (!validator) {
+            window.statusLabel()->setText(QStringLiteral("account editing needs a spawned baresip (not --connect)"));
+            return;
+        }
+        AccountsFile current;
+        QString error;
+        if (!accounts::readFile(accountsPath, &current, &error)) {
+            window.statusLabel()->setText(error);
+            return;
+        }
+        dialog = new AccountsDialog(current, validator.get(), &window);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setModal(true);
+        dialog->setCallActive(controller.callState() != CallController::CallState::Idle);
+        QObject::connect(dialog, &AccountsDialog::saved, &window, [&](const AccountsFile &saved) {
+            const AccountInfo active = firstAccountOrPlaceholder(saved);
+            window.setAccount(active);
+            controller.setAccountAor(saved.accounts.isEmpty() ? QString() : active.aor);
+        });
+        dialog->show();
+    };
+    QObject::connect(&window, &MainWindow::configureRequested, &window, openAccounts);
+    QObject::connect(&controller, &CallController::callStateChanged, &window, [&](CallController::CallState state) {
+        if (dialog)
+            dialog->setCallActive(state != CallController::CallState::Idle);
+    });
 
     QObject::connect(&instance, &SingleInstance::numberReceived, &window,
                      [&](const QString &n, const QString &activationToken) {
@@ -148,6 +211,8 @@ int main(int argc, char *argv[])
     window.raiseWindow(); // show + request focus (uses the launcher's activation token, if any)
     if (!number.isEmpty())
         window.dialNumber(number);
+    if (accountsFile.accounts.isEmpty() && validator)
+        QTimer::singleShot(0, &window, openAccounts); // nothing to dial with yet: set up an account first
 
     return app.exec();
 }

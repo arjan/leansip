@@ -26,7 +26,13 @@ public:
     // Fills the number field and dials (used for the CLI argument and forwarded numbers).
     void dialNumber(const QString &number);
     void raiseWindow();
+    // Swap the account shown in the header (after the accounts dialog saved a new active one).
+    void setAccount(const AccountInfo &account);
 
+signals:
+    void configureRequested(); // F2
+
+public:
     // Accessors for tests.
     QLineEdit *numberEdit() const { return m_number; }
     QLabel *statusLabel() const { return m_status; }
@@ -42,6 +48,7 @@ protected:
 private:
     // Big digits by default; shrinks the font until the current text fits the field.
     void fitNumberFont();
+    static constexpr int kWindowWidth = 272;
     static constexpr int kNumberMaxPt = 30;
     static constexpr int kNumberMinPt = 11;
     void buildUi(const AccountInfo &account);

@@ -11,6 +11,24 @@ namespace leansip {
 
 namespace {
 
+// A stacked layout sizes the window from each page's raw sizeHint(), which a page's fixed width
+// does not bound (a 30pt line edit alone asks for ~360px). Pin the hint's width so the window
+// stays at kWindowWidth and only its height follows the content.
+class FixedWidthPage : public QWidget {
+public:
+    FixedWidthPage(int width, QWidget *parent)
+        : QWidget(parent)
+        , m_width(width)
+    {
+        setFixedWidth(width);
+    }
+    QSize sizeHint() const override { return {m_width, QWidget::sizeHint().height()}; }
+    QSize minimumSizeHint() const override { return {m_width, QWidget::minimumSizeHint().height()}; }
+
+private:
+    int m_width;
+};
+
 QString formatElapsed(qint64 ms)
 {
     const qint64 secs = ms / 1000;
@@ -63,7 +81,7 @@ MainWindow::MainWindow(const AccountInfo &account, CallController *controller, Q
 void MainWindow::buildUi(const AccountInfo &account)
 {
     setWindowTitle(QStringLiteral("leansip"));
-    setFixedWidth(272);
+    setFixedWidth(kWindowWidth);
     setObjectName(QStringLiteral("leansip"));
     // Frameless windows have no border of their own; draw a thin one so the edge is visible.
     setStyleSheet(QStringLiteral(
@@ -79,7 +97,7 @@ void MainWindow::buildUi(const AccountInfo &account)
     // ignored for sizing until it is shown (see toggleHelp()).
     m_pages->setSizeConstraint(QLayout::SetFixedSize);
 
-    m_dialerPage = new QWidget(this);
+    m_dialerPage = new FixedWidthPage(kWindowWidth, this);
     auto *root = new QVBoxLayout(m_dialerPage);
     root->setContentsMargins(16, 10, 16, 10);
     root->setSpacing(4);
@@ -133,24 +151,30 @@ void MainWindow::buildUi(const AccountInfo &account)
 
 QWidget *MainWindow::buildHelpPage()
 {
-    auto *page = new QWidget(this);
-    page->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored); // not counted while hidden
+    auto *page = new FixedWidthPage(kWindowWidth, this);
+    page->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Ignored); // not counted while hidden
     auto *layout = new QVBoxLayout(page);
     layout->setContentsMargins(16, 10, 16, 10);
     auto *text = new QLabel(page);
     text->setObjectName(QStringLiteral("helpLabel"));
     text->setTextFormat(Qt::RichText);
+    text->setWordWrap(true);
+    // A wrapping label's sizeHint is clamped to its maximum width; the stacked layout sizes the
+    // window from page hints, so this is what actually keeps the help page at window width.
+    text->setMaximumWidth(kWindowWidth - 2 * 16);
     text->setText(tr(
-        "<b>leansip keys</b>"
-        "<table cellspacing='0' cellpadding='3'>"
-        "<tr><td><tt>0-9 * # +</tt></td><td>type a number; DTMF during a call</td></tr>"
-        "<tr><td><tt>Enter</tt></td><td>call &middot; answer</td></tr>"
-        "<tr><td><tt>Esc</tt></td><td>hang up &middot; decline &middot; clear &middot; quit when empty</td></tr>"
-        "<tr><td><tt>&uarr;</tt></td><td>recall last number</td></tr>"
-        "<tr><td><tt>? F1</tt></td><td>this help</td></tr>"
-        "<tr><td><tt>Ctrl+Q</tt></td><td>quit</td></tr>"
-        "</table>"
-        "<p>Drag anywhere to move the window.<br>Esc closes this screen.</p>"));
+        // Plain wrapped lines rather than a table: a table has a minimum column width that would
+        // force the window wider than the dialer.
+        "<p><b>leansip keys</b></p>"
+        "<p><b>0-9 * # +</b> &nbsp;type a number; DTMF during a call<br>"
+        "<b>Enter</b> &nbsp;call &middot; answer<br>"
+        "<b>Esc</b> &nbsp;hang up &middot; decline &middot; clear &middot; quit when empty<br>"
+        "<b>&uarr;</b> &nbsp;recall last number<br>"
+        "<b>? F1</b> &nbsp;this help<br>"
+        "<b>F2</b> &nbsp;accounts: add, edit, reorder; Enter picks the active one, "
+        "Ctrl+S saves after a real registration<br>"
+        "<b>Ctrl+Q</b> &nbsp;quit</p>"
+        "<p>Drag anywhere to move the window. Esc closes this screen.</p>"));
     layout->addWidget(text);
     layout->addStretch();
     return page;
@@ -191,6 +215,12 @@ bool MainWindow::handleKey(QKeyEvent *event)
     }
     if (key == Qt::Key_Question || key == Qt::Key_F1) {
         toggleHelp();
+        return true;
+    }
+    if (key == Qt::Key_F2) {
+        if (isHelpVisible())
+            toggleHelp();
+        emit configureRequested();
         return true;
     }
     if (isHelpVisible()) {
@@ -273,11 +303,11 @@ void MainWindow::escape()
 void MainWindow::toggleHelp()
 {
     if (isHelpVisible()) {
-        m_helpPage->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored);
+        m_helpPage->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Ignored);
         m_pages->setCurrentWidget(m_dialerPage);
         m_number->setFocus();
     } else {
-        m_helpPage->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred); // let it size the window
+        m_helpPage->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred); // let it size the window's height
         m_pages->setCurrentWidget(m_helpPage);
         setFocus();
     }
@@ -383,6 +413,12 @@ void MainWindow::updateRegistration(CallController::RegistrationState state, con
     m_registration->setText(QStringLiteral("<span style=\"color:%1\">●</span>").arg(colour));
     m_registration->setToolTip(detail.isEmpty() ? text : QStringLiteral("%1 — %2").arg(text, detail));
     updateForState(m_controller->callState());
+}
+
+void MainWindow::setAccount(const AccountInfo &account)
+{
+    m_accountLabel->setText(account.label());
+    m_accountLabel->setToolTip(account.aor);
 }
 
 void MainWindow::showError(const QString &message)
