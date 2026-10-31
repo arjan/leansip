@@ -12,6 +12,7 @@ leansip 0612345678         # open and dial immediately
 leansip tel:+31201234567   # tel: and sip: URIs are accepted
 leansip --connect 127.0.0.1:4444   # attach to a baresip you started yourself
 leansip --baresip-dir ~/other-baresip
+leansip --record                   # record calls (when this window starts leansipd)
 ```
 
 One instance runs per baresip directory. A second invocation for the same directory
@@ -32,7 +33,10 @@ The UI shows the **first** account from `~/.baresip/accounts`.
 
 ## Keys
 
-The window is frameless and entirely keyboard driven (drag anywhere to move it).
+The window is frameless and entirely keyboard driven (drag anywhere to move it). It looks like a
+small handset: a beige case with a border and a green LCD for the number and status, the same in
+light and dark desktop themes. The LCD's corner shows `MUTE` and `+N CALLS` (calls besides the
+one shown, e.g. an agent's).
 
 | Key          | Action                                                   |
 |--------------|----------------------------------------------------------|
@@ -40,6 +44,7 @@ The window is frameless and entirely keyboard driven (drag anywhere to move it).
 | `Enter`      | call · answer                                            |
 | `Esc`        | hang up · decline · cancel queued dial · clear · quit when empty |
 | `↑`          | recall the last number dialled                           |
+| `m`          | mute · unmute the microphone during a call               |
 | `?` / `F1`   | help screen (`Esc` closes it)                            |
 | `F2`         | accounts screen (see below)                              |
 | `Ctrl+Q`     | quit                                                     |
@@ -72,6 +77,9 @@ else are others. All clients see the same calls and events, so an agent can watc
 a call you are on, and you can hang up a call an agent placed.
 
 - The dialer starts `leansipd --ui-owned` when none is running, connects, and binds to it.
+  It identifies itself as the dialer, so sipctl's dial rules do not apply to it, and it
+  selects its own call and account by id for every command, since baresip's "current call"
+  is shared with the other clients.
   That daemon stops (and with it baresip, unregistering) when the dialer closes or crashes,
   even if sipctl clients are still connected.
 - A daemon started by `sipctl start` keeps running until `sipctl stop`; a dialer that
@@ -81,9 +89,12 @@ a call you are on, and you can hang up a call an agent placed.
   directory. They speak baresip's own `ctrl_tcp` protocol (netstring-framed JSON); the
   daemon routes each response back to the client that asked, broadcasts every event with a
   running `"seq"` and a `"ts"`, and keeps the last 2000 events for clients that connect later.
-  It refuses `quit` and adds `leansipd_status`, `leansipd_events <since>`,
-  `leansipd_restart [override]`, `leansipd_bind` and `leansipd_shutdown`.
-- The daemon's output, and baresip's, goes to `leansipd.log` in the same directory.
+  It refuses `quit` and adds its own commands: `leansipd_seq` (several commands back to
+  back, e.g. `callfind` + `hangup`), `leansipd_play`, `leansipd_recordings`,
+  `leansipd_status`, `leansipd_events <since>`, `leansipd_restart [override]`,
+  `leansipd_hello ui`, `leansipd_bind` and `leansipd_shutdown`.
+- The daemon's output, and baresip's, goes to `leansipd.log` in the same directory
+  (rotated at 5 MB). It restarts baresip if baresip crashes.
 
 leansip never edits `~/.baresip`. leansipd writes a derived config to that runtime directory:
 
@@ -115,18 +126,24 @@ connect to it. This is the same trust level as the baresip console modules.
 directory (account).
 
 ```
-sipctl start                         # also: --sip-trace (SIP messages to leansipd.log)
-seq=$(sipctl dial 940 | jq .seq)     # {"ok":true,"seq":12,"data":"call id: ..."}
-sipctl wait CALL_ESTABLISHED,CALL_CLOSED --since "$seq" --timeout 20
+sipctl start --record                # also --sip-trace, --max-call-seconds
+r=$(sipctl dial 940)                 # {"ok":true,"seq":12,"call":"…","data":"call id: …"}
+sipctl wait CALL_ESTABLISHED,CALL_CLOSED --since "$(echo "$r" | jq .seq)" --timeout 20
+sipctl listen                        # transcript of what the far end says next
+sipctl say "I'd like to speak to support" --wait
 sipctl dtmf 1#
-sipctl raw callstat                  # any baresip command
+sipctl analyze                       # timing, codec, RTCP, levels, warnings
 sipctl hangup
 sipctl stop
 ```
 
-`sipctl help` lists the commands, `sipctl help <command>` explains one. The full reference,
-including the event types, waiting without races and local test calls between two accounts
-without a SIP server, is [docs/sipctl.md](docs/sipctl.md).
+Speech (`say`, `listen`, `transcribe`) uses ElevenLabs and needs `ELEVENLABS_API_KEY`. sipctl
+only dials loopback destinations and patterns listed in `<baresip dir>/sipctl-allow`, and hangs
+up its own calls after 10 minutes by default; the dialer is exempt from both.
+
+`sipctl help` lists the commands, `sipctl help <command>` explains one. The full reference is
+[docs/sipctl.md](docs/sipctl.md). `skills/sipctl/SKILL.md` is a Claude Code skill for SIP
+testing and debugging with it.
 
 ## Build (Ubuntu)
 
@@ -154,7 +171,12 @@ sudo cmake --install build
 
 - `src/core/` — Qt Core/Network only, unit-tested: netstring framing, accounts
   parser, config derivation, ctrl_tcp client, call state machine, single-instance,
-  the leansipd proxy (`ctrl_proxy`) and its client/launcher (`daemon_client`).
+  the leansipd proxy (`ctrl_proxy`) and its client/launcher (`daemon_client`), WAV
+  handling and speech detection, dial policy and recordings (`media_control`), call
+  analysis, the ElevenLabs client.
 - `src/ui/` — the dialer widget.
 - `src/daemon/` — `leansipd`; `src/sipctl/` — `sipctl`.
-- `tests/` — one QtTest executable per unit, run with the offscreen platform.
+- `tests/` — one QtTest executable per unit, run with the offscreen platform, plus
+  `integration_loopback.sh`: two daemons and a real baresip calling each other on 127.0.0.1,
+  with a fake ElevenLabs server (`fake_elevenlabs.py`). `LEANSIP_SCREENSHOT_DIR=<dir>
+  ./build/tests/tst_main_window screenshots` saves PNGs of the dialer.

@@ -1,5 +1,6 @@
 #include "main_window.h"
 
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -22,8 +23,18 @@ public:
     {
         setFixedWidth(width);
     }
-    QSize sizeHint() const override { return {m_width, QWidget::sizeHint().height()}; }
+    // With word-wrapping labels the layout's plain hint assumes an arbitrary width; ask for the
+    // height at the width the page really has.
+    QSize sizeHint() const override
+    {
+        const int h = layout() && layout()->hasHeightForWidth() ? layout()->totalHeightForWidth(m_width)
+                                                                 : QWidget::sizeHint().height();
+        return {m_width, h};
+    }
     QSize minimumSizeHint() const override { return {m_width, QWidget::minimumSizeHint().height()}; }
+    // The height is already resolved for the fixed width above. Reporting height-for-width would
+    // make the stacked layout size the window for the tallest page, hidden ones included.
+    bool hasHeightForWidth() const override { return false; }
 
 private:
     int m_width;
@@ -33,6 +44,23 @@ QString formatElapsed(qint64 ms)
 {
     const qint64 secs = ms / 1000;
     return QStringLiteral("%1:%2").arg(secs / 60, 2, 10, QLatin1Char('0')).arg(secs % 60, 2, 10, QLatin1Char('0'));
+}
+
+// A small handset look: beige case, recessed LCD, monospace digits. Fixed colours, so it looks
+// the same in light and dark desktop themes.
+constexpr auto kCase = "#e7e1cf";
+constexpr auto kInk = "#33352d";
+constexpr auto kLcd = "#b7c29d";
+constexpr auto kLcdInk = "#1d2615";
+constexpr auto kLcdDim = "#62704f";
+
+QFont monoFont(int pointSize, bool bold = false)
+{
+    QFont f(QStringLiteral("DejaVu Sans Mono"));
+    f.setStyleHint(QFont::Monospace);
+    f.setPointSize(pointSize);
+    f.setBold(bold);
+    return f;
 }
 
 bool isDtmf(const QString &text)
@@ -67,6 +95,8 @@ MainWindow::MainWindow(const AccountInfo &account, CallController *controller, Q
     });
     connect(m_controller, &CallController::backendLost, this, [this](const QString &reason) { showError(reason); });
     connect(m_controller, &CallController::backendReady, this, [this] { updateForState(m_controller->callState()); });
+    connect(m_controller, &CallController::muteChanged, this, &MainWindow::updateIndicators);
+    connect(m_controller, &CallController::otherCallsChanged, this, &MainWindow::updateIndicators);
 
     m_elapsedTimer.setInterval(1000);
     connect(&m_elapsedTimer, &QTimer::timeout, this, &MainWindow::tickElapsed);
@@ -83,26 +113,31 @@ void MainWindow::buildUi(const AccountInfo &account)
     setWindowTitle(QStringLiteral("leansip"));
     setFixedWidth(kWindowWidth);
     setObjectName(QStringLiteral("leansip"));
-    // Frameless windows have no border of their own; draw a thin one so the edge is visible.
+    // Frameless windows have no border of their own; the case outline is drawn here.
     setStyleSheet(QStringLiteral(
-        "#leansip { border: 1px solid palette(mid); }"
-        "QLabel#registrationLabel { color: palette(placeholder-text); }"
-        "QLineEdit#numberEdit { border: none; border-bottom: 1px solid palette(mid); background: transparent; padding: 4px 0; }"
-        "QLineEdit#numberEdit[dim=\"true\"] { color: palette(placeholder-text); }"));
+                      "#leansip { background: %1; border: 2px solid %2; }"
+                      "QLabel { color: %2; }"
+                      "QFrame#lcd { background: %3; border: 2px solid; border-radius: 3px;"
+                      "  border-color: #4c5440 #d9e0c6 #d9e0c6 #4c5440; }"
+                      "QFrame#lcd QLabel { color: %4; }"
+                      "QLineEdit#numberEdit { border: none; background: transparent; padding: 0; }")
+                      .arg(QLatin1String(kCase), QLatin1String(kInk), QLatin1String(kLcd), QLatin1String(kLcdInk)));
+    setAttribute(Qt::WA_StyledBackground, true); // a plain QWidget ignores QSS background/border otherwise
 
     m_pages = new QStackedLayout(this);
-    m_pages->setContentsMargins(0, 0, 0, 0); // the pages carry their own margins
+    m_pages->setContentsMargins(0, 0, 0, 0); // the pages' own margins keep content off the case border
     // Track the current page's height exactly. A stacked layout's hint is the max over all
     // pages, which would size the dialer for the taller help page; the help page is therefore
     // ignored for sizing until it is shown (see toggleHelp()).
     m_pages->setSizeConstraint(QLayout::SetFixedSize);
 
     m_dialerPage = new FixedWidthPage(kWindowWidth, this);
+    m_dialerPage->setObjectName(QStringLiteral("dialerPage"));
     auto *root = new QVBoxLayout(m_dialerPage);
-    root->setContentsMargins(16, 10, 16, 10);
-    root->setSpacing(4);
+    root->setContentsMargins(10, 8, 10, 10);
+    root->setSpacing(6);
 
-    // Centred "● account" line; the dot's colour is the registration state, details in its tooltip.
+    // Centred "● ACCOUNT" line; the dot is the registration LED, details in its tooltip.
     auto *header = new QHBoxLayout;
     header->setSpacing(6);
     m_registration = new QLabel(m_dialerPage);
@@ -110,34 +145,52 @@ void MainWindow::buildUi(const AccountInfo &account)
     m_accountLabel = new QLabel(account.label(), m_dialerPage);
     m_accountLabel->setToolTip(account.aor);
     m_accountLabel->setObjectName(QStringLiteral("accountLabel"));
+    m_accountLabel->setFont(monoFont(9, true));
     header->addStretch(1);
     header->addWidget(m_registration);
     header->addWidget(m_accountLabel);
     header->addStretch(1);
     root->addLayout(header);
 
-    m_number = new QLineEdit(m_dialerPage);
+    auto *lcd = new QFrame(m_dialerPage);
+    lcd->setObjectName(QStringLiteral("lcd"));
+    auto *lcdLayout = new QVBoxLayout(lcd);
+    lcdLayout->setContentsMargins(4, 2, 4, 4);
+    lcdLayout->setSpacing(0);
+
+    m_indicators = new QLabel(lcd);
+    m_indicators->setObjectName(QStringLiteral("indicatorLabel"));
+    m_indicators->setAlignment(Qt::AlignRight);
+    m_indicators->setFont(monoFont(7, true));
+    m_indicators->setTextFormat(Qt::RichText);
+    m_indicators->setFixedHeight(m_indicators->fontMetrics().height()); // reserved, so nothing jumps
+    lcdLayout->addWidget(m_indicators);
+
+    m_number = new QLineEdit(lcd);
     m_number->setObjectName(QStringLiteral("numberEdit"));
     m_number->setPlaceholderText(tr("enter number"));
     m_number->setAlignment(Qt::AlignCenter);
     m_number->setFrame(false);
-    QFont font = m_number->font();
-    font.setPointSize(kNumberMaxPt);
-    m_number->setFont(font);
+    m_number->setFont(monoFont(kNumberMaxPt, true));
+    QPalette numberPalette = m_number->palette();
+    numberPalette.setColor(QPalette::Text, QColor(QLatin1String(kLcdInk)));
+    numberPalette.setColor(QPalette::PlaceholderText, QColor(QLatin1String(kLcdDim)));
+    m_number->setPalette(numberPalette);
     m_number->installEventFilter(this);
     connect(m_number, &QLineEdit::textChanged, this, [this] {
         fitNumberFont();
         updateForState(m_controller->callState());
     });
-    root->addWidget(m_number);
+    lcdLayout->addWidget(m_number);
 
-    m_status = new QLabel(m_dialerPage);
+    m_status = new QLabel(lcd);
     m_status->setObjectName(QStringLiteral("statusLabel"));
     m_status->setAlignment(Qt::AlignCenter);
     m_status->setWordWrap(true);
+    m_status->setFont(monoFont(8));
     m_status->setMinimumHeight(m_status->fontMetrics().height()); // reserve one line so the window doesn't jump
-    root->addWidget(m_status);
-
+    lcdLayout->addWidget(m_status);
+    root->addWidget(lcd);
 
     m_helpPage = buildHelpPage();
 
@@ -170,6 +223,7 @@ QWidget *MainWindow::buildHelpPage()
         "<b>Enter</b> &nbsp;call &middot; answer<br>"
         "<b>Esc</b> &nbsp;hang up &middot; decline &middot; clear &middot; quit when empty<br>"
         "<b>&uarr;</b> &nbsp;recall last number<br>"
+        "<b>m</b> &nbsp;mute &middot; unmute the microphone in a call<br>"
         "<b>? F1</b> &nbsp;this help<br>"
         "<b>F2</b> &nbsp;accounts: add, edit, reorder; Enter picks the active one, "
         "Ctrl+S saves after a real registration<br>"
@@ -251,6 +305,10 @@ bool MainWindow::handleKey(QKeyEvent *event)
         break;
     }
 
+    if (state == S::Active && event->modifiers() == Qt::NoModifier && event->key() == Qt::Key_M) {
+        m_controller->toggleMute();
+        return true;
+    }
     if (state == S::Active && isDtmf(event->text())) {
         m_controller->sendDtmf(event->text().at(0));
         // Flash the digit bright, then fall back to the dimmed peer number.
@@ -438,14 +496,25 @@ void MainWindow::showPeerNumber()
     setNumberDim(true);
 }
 
+void MainWindow::updateIndicators()
+{
+    QStringList tags;
+    const QString tag = QStringLiteral("<span style=\"background:%1; color:%2;\">&nbsp;%3&nbsp;</span>");
+    if (m_controller->isMuted())
+        tags << tag.arg(QLatin1String(kLcdInk), QLatin1String(kLcd), tr("MUTE"));
+    if (const int others = m_controller->otherCallCount(); others > 0)
+        tags << tag.arg(QLatin1String(kLcdInk), QLatin1String(kLcd), tr("+%n CALL(S)", nullptr, others));
+    m_indicators->setText(tags.join(QStringLiteral("&nbsp;")));
+}
+
 void MainWindow::setNumberDim(bool dim)
 {
     if (m_number->property("dim").toBool() == dim)
         return;
     m_number->setProperty("dim", dim);
-    // Dynamic-property selectors only re-evaluate after a repolish.
-    m_number->style()->unpolish(m_number);
-    m_number->style()->polish(m_number);
+    QPalette p = m_number->palette();
+    p.setColor(QPalette::Text, QColor(QLatin1String(dim ? kLcdDim : kLcdInk)));
+    m_number->setPalette(p);
 }
 
 } // namespace leansip

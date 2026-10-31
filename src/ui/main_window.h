@@ -18,6 +18,7 @@ namespace leansip {
 //   digits/*/#/+  type (idle) or send DTMF (active call)
 //   Enter         call / answer         Esc   hang up / decline / clear / quit
 //   Up            recall last number    ?/F1  help         Ctrl+Q  quit
+//   m             mute / unmute the microphone during a call
 class MainWindow : public QWidget {
     Q_OBJECT
 public:
@@ -37,6 +38,7 @@ public:
     QLineEdit *numberEdit() const { return m_number; }
     QLabel *statusLabel() const { return m_status; }
     QLabel *registrationLabel() const { return m_registration; }
+    QLabel *indicatorLabel() const { return m_indicators; }
     bool isHelpVisible() const;
     QString lastDialed() const { return m_lastDialed; }
 
@@ -64,6 +66,8 @@ private:
     // In a call the field shows the peer number dimmed; a sent DTMF digit flashes bright briefly.
     void showPeerNumber();
     void setNumberDim(bool dim);
+    // "MUTE" and "+N" (calls besides the shown one) in the corner of the display.
+    void updateIndicators();
     static constexpr int kDtmfFlashMs = 400;
 
     CallController *m_controller;
@@ -74,6 +78,7 @@ private:
     QLabel *m_registration = nullptr;
     QLineEdit *m_number = nullptr;
     QLabel *m_status = nullptr;
+    QLabel *m_indicators = nullptr;
     QString m_lastDialed;
     bool m_outgoingCall = false; // current/last call was started by us: restore the number afterwards
     CallController::CallState m_appliedState = CallController::CallState::Idle; // last state updateForState() saw

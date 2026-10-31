@@ -80,8 +80,11 @@ int main(int argc, char *argv[])
     const QCommandLineOption dirOpt({QStringLiteral("d"), QStringLiteral("baresip-dir")},
                                     QStringLiteral("baresip config directory"), QStringLiteral("dir"),
                                     QDir::home().filePath(QStringLiteral(".baresip")));
+    const QCommandLineOption recordOpt(QStringLiteral("record"),
+                                       QStringLiteral("Record calls (both directions) when this window starts leansipd"));
     parser.addOption(connectOpt);
     parser.addOption(dirOpt);
+    parser.addOption(recordOpt);
     parser.process(app);
 
     const QStringList positional = parser.positionalArguments();
@@ -147,7 +150,10 @@ int main(int argc, char *argv[])
     } else {
         // baresip belongs to leansipd, shared with sipctl/agents. A daemon we start is ours: we
         // bind to it, and it stops when this window closes. One that sipctl started is left alone.
-        const QStringList daemonArgs{QStringLiteral("--ui-owned")};
+        QStringList daemonArgs{QStringLiteral("--ui-owned")};
+        if (parser.isSet(recordOpt))
+            daemonArgs << QStringLiteral("--record");
+        controller.setDaemonMode(true);
         QString error;
         if (!daemon::ensureRunning(baresipDir, daemonArgs, &error)) {
             QMessageBox::critical(nullptr, QStringLiteral("leansip"), QStringLiteral("Could not start leansipd:\n%1").arg(error));
@@ -175,7 +181,9 @@ int main(int argc, char *argv[])
         });
         QObject::connect(&client, &BaresipClient::connected, &app, [&] {
             reattachAttempts = 0;
-            // Refused (harmlessly) by a daemon we did not start; the reply is not tracked.
+            // We are the dialer: exempt from sipctl's dial rules. Binding is refused (harmlessly)
+            // by a daemon we did not start. Neither reply is tracked.
+            client.sendCommand(QStringLiteral("leansipd_hello"), QStringLiteral("ui"));
             client.sendCommand(QStringLiteral("leansipd_bind"));
         });
         // Only now: a Unix socket may connect synchronously, inside this call.

@@ -49,10 +49,10 @@ private slots:
         QCOMPARE(m_window->statusLabel()->alignment(), Qt::AlignCenter);
         QCOMPARE(m_window->numberEdit()->placeholderText(), "enter number");
         const int big = m_window->numberEdit()->font().pointSize();
-        QVERIFY(big >= 24);
+        QVERIFY(big >= 22); // 12 monospace digits still fit large
 
         m_window->numberEdit()->setText("+31201234567");
-        QVERIFY(m_window->numberEdit()->font().pointSize() >= 24); // a normal number stays large
+        QVERIFY(m_window->numberEdit()->font().pointSize() >= 22); // a normal number stays large
 
         m_window->numberEdit()->setText("sip:alice@example.com:5060");
         const int small = m_window->numberEdit()->font().pointSize();
@@ -71,7 +71,8 @@ private slots:
     void windowHeightFollowsCurrentPage()
     {
         // The dialer must not be sized for the (taller) hidden help page.
-        const QWidget *dialer = m_window->numberEdit()->parentWidget();
+        const QWidget *dialer = m_window->findChild<QWidget *>("dialerPage");
+        QVERIFY(dialer);
         QCOMPARE(m_window->height(), dialer->sizeHint().height());
         QVERIFY(m_window->height() < 200);
         const int compact = m_window->height();
@@ -276,6 +277,84 @@ private slots:
         connectAndRegister();
         m_server->dropClient();
         QTRY_VERIFY(m_window->statusLabel()->text().contains("lost"));
+    }
+
+    void mKeyMutesOnlyDuringACall()
+    {
+        connectAndRegister();
+        QTest::keyClicks(m_window->numberEdit(), "m"); // idle: an ordinary character (sip:user)
+        QCOMPARE(m_window->numberEdit()->text(), "m");
+        m_window->numberEdit()->clear();
+
+        QTest::keyClicks(m_window->numberEdit(), "555");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Return);
+        QTRY_COMPARE(m_server->lastCommand(), "dial");
+        m_server->sendResponse(m_server->lastToken(), true, "call id: c1");
+        m_server->sendEvent("CALL_ESTABLISHED", {{"id", "c1"}, {"peeruri", "sip:555@example"}});
+        QTRY_COMPARE(m_controller->callState(), CallState::Active);
+
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_M);
+        QTRY_COMPARE(m_server->lastCommand(), "mute");
+        QVERIFY(!m_window->indicatorLabel()->text().contains("MUTE"));
+        m_server->sendResponse(m_server->lastToken(), true, "call muted");
+        QTRY_VERIFY(m_window->indicatorLabel()->text().contains("MUTE"));
+        QVERIFY(m_controller->isMuted());
+
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_M);
+        QTRY_COMPARE(m_server->received.size(), 4); // reginfo, dial, mute, mute
+        m_server->sendResponse(m_server->lastToken(), true, "call un-muted");
+        QTRY_VERIFY(!m_window->indicatorLabel()->text().contains("MUTE"));
+
+        // Ending the call clears the indicator.
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_M);
+        QTRY_COMPARE(m_server->received.size(), 5);
+        m_server->sendResponse(m_server->lastToken(), true, "call muted");
+        QTRY_VERIFY(m_controller->isMuted());
+        m_server->sendEvent("CALL_CLOSED", {{"id", "c1"}, {"param", "bye"}});
+        QTRY_COMPARE(m_controller->callState(), CallState::Idle);
+        QVERIFY(!m_window->indicatorLabel()->text().contains("MUTE"));
+    }
+
+    void otherCallsShowAsIndicator()
+    {
+        connectAndRegister();
+        m_server->sendEvent("CALL_INCOMING", {{"id", "a"}, {"peeruri", "sip:alice@example"}});
+        QTRY_COMPARE(m_controller->callState(), CallState::Incoming);
+        m_server->sendEvent("CALL_RINGING", {{"id", "b"}, {"peeruri", "sip:ivr@example"}});
+        QTRY_VERIFY(m_window->indicatorLabel()->text().contains("+1"));
+        m_server->sendEvent("CALL_CLOSED", {{"id", "b"}, {"param", "bye"}});
+        QTRY_VERIFY(!m_window->indicatorLabel()->text().contains("+1"));
+        QCOMPARE(m_controller->callState(), CallState::Incoming); // another call ending is not ours
+    }
+
+    // LEANSIP_SCREENSHOT_DIR=/some/dir ctest -R tst_main_window  saves the look for review.
+    void screenshots()
+    {
+        const QString dir = qEnvironmentVariable("LEANSIP_SCREENSHOT_DIR");
+        if (dir.isEmpty())
+            QSKIP("set LEANSIP_SCREENSHOT_DIR to save screenshots");
+        connectAndRegister();
+        m_window->grab().save(dir + "/idle.png");
+        m_window->setFocus();
+        m_window->grab().save(dir + "/idle-unfocused.png");
+        m_window->numberEdit()->setFocus();
+        QTest::keyClicks(m_window->numberEdit(), "0612345678");
+        m_window->grab().save(dir + "/typed.png");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Return);
+        QTRY_COMPARE(m_server->lastCommand(), "dial");
+        m_server->sendResponse(m_server->lastToken(), true, "call id: c1");
+        m_server->sendEvent("CALL_ESTABLISHED", {{"id", "c1"}, {"peeruri", "sip:0612345678@example"}});
+        QTRY_COMPARE(m_controller->callState(), CallState::Active);
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_M);
+        QTRY_COMPARE(m_server->lastCommand(), "mute");
+        m_server->sendResponse(m_server->lastToken(), true, "call muted");
+        m_server->sendEvent("CALL_INCOMING", {{"id", "c2"}, {"peeruri", "sip:other@example"}});
+        QTRY_VERIFY(m_window->indicatorLabel()->text().contains("+1"));
+        m_window->grab().save(dir + "/call.png");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_F1);
+        QTRY_VERIFY(m_window->isHelpVisible());
+        QTest::qWait(50);
+        m_window->grab().save(dir + "/help.png");
     }
 
 private:

@@ -1,6 +1,8 @@
 #include "core/call_controller.h"
 #include "fake_baresip_server.h"
 
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QSignalSpy>
 #include <QtTest>
 
@@ -502,6 +504,72 @@ private slots:
         QVERIFY(!rig.controller.ownsCall());
         rig.controller.answer();
         QVERIFY(rig.controller.ownsCall());
+    }
+
+    void daemonModeTargetsTheCallAndAccountById()
+    {
+        Rig rig;
+        rig.controller.setDaemonMode(true);
+        rig.controller.setAccountAor("sip:me@example.com");
+        QVERIFY(rig.connectAndRegister());
+        auto steps = [&] { return QJsonDocument::fromJson(rig.server.lastParams().toUtf8()).array(); };
+        auto seqReply = [&](bool ok, const QString &lastData) {
+            const QJsonArray a{QJsonObject{{"command", "x"}, {"ok", true}, {"data", ""}},
+                               QJsonObject{{"command", "y"}, {"ok", ok}, {"data", lastData}}};
+            rig.server.sendResponse(rig.server.lastToken(), ok, QString::fromUtf8(QJsonDocument(a).toJson(QJsonDocument::Compact)));
+        };
+
+        rig.controller.dial("940");
+        QVERIFY(rig.waitCommands(2));
+        QCOMPARE(rig.server.lastCommand(), "leansipd_seq");
+        QCOMPARE(steps(), (QJsonArray{QJsonArray{"uafind", "sip:me@example.com"}, QJsonArray{"dial", "940"}}));
+        seqReply(true, "call id: abc123");
+        QTRY_COMPARE(rig.controller.callId(), "abc123");
+
+        rig.server.sendEvent("CALL_ESTABLISHED", {{"id", "abc123"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Active);
+        rig.controller.sendDtmf('5');
+        QVERIFY(rig.waitCommands(4)); // sequence + local tone
+        QCOMPARE(rig.server.received.at(2).value("command").toString(), "leansipd_seq");
+        QCOMPARE(QJsonDocument::fromJson(rig.server.received.at(2).value("params").toString().toUtf8()).array(),
+                 (QJsonArray{QJsonArray{"callfind", "abc123"}, QJsonArray{"sndcode", "5"}}));
+
+        QSignalSpy muted(&rig.controller, &CallController::muteChanged);
+        rig.controller.toggleMute();
+        QVERIFY(rig.waitCommands(5));
+        QCOMPARE(steps().at(1).toArray().at(0).toString(), "mute");
+        seqReply(true, "call muted");
+        QTRY_COMPARE(muted.size(), 1);
+        QVERIFY(rig.controller.isMuted());
+
+        rig.controller.hangup();
+        QVERIFY(rig.waitCommands(6));
+        QCOMPARE(steps(), (QJsonArray{QJsonArray{"callfind", "abc123"}, QJsonArray{"hangup", ""}}));
+        rig.server.sendEvent("CALL_CLOSED", {{"id", "abc123"}, {"param", "bye"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Idle);
+        QVERIFY(!rig.controller.isMuted());
+        QVERIFY(rig.controller.callId().isEmpty());
+    }
+
+    void anotherCallClosingLeavesOursAlone()
+    {
+        Rig rig;
+        QVERIFY(rig.connectAndRegister());
+        QSignalSpy others(&rig.controller, &CallController::otherCallsChanged);
+        rig.server.sendEvent("CALL_INCOMING", {{"id", "mine"}, {"peeruri", "sip:a@x"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Incoming);
+        rig.controller.answer();
+        rig.server.sendEvent("CALL_ESTABLISHED", {{"id", "mine"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Active);
+
+        rig.server.sendEvent("CALL_RINGING", {{"id", "agent"}, {"peeruri", "sip:ivr@x"}});
+        QTRY_COMPARE(rig.controller.otherCallCount(), 1);
+        rig.server.sendEvent("CALL_ESTABLISHED", {{"id", "agent"}});
+        rig.server.sendEvent("CALL_CLOSED", {{"id", "agent"}, {"param", "486 Busy Here"}});
+        QTRY_COMPARE(rig.controller.otherCallCount(), 0);
+        QCOMPARE(rig.controller.callState(), CallState::Active);
+        QCOMPARE(rig.controller.callId(), "mine");
+        QCOMPARE(others.size(), 2);
     }
 
     void connectionFailureReportsBackendLost()
