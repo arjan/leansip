@@ -40,6 +40,16 @@ BaresipProcess::BaresipProcess(QObject *parent)
     });
 }
 
+void BaresipProcess::setCaptureOutput(bool capture)
+{
+    m_process.setProcessChannelMode(capture ? QProcess::MergedChannels : QProcess::ForwardedChannels);
+    disconnect(&m_process, &QProcess::readyReadStandardOutput, this, nullptr);
+    if (capture) {
+        connect(&m_process, &QProcess::readyReadStandardOutput, this,
+                [this] { emit outputReceived(m_process.readAllStandardOutput()); });
+    }
+}
+
 BaresipProcess::~BaresipProcess()
 {
     stop();
@@ -117,7 +127,11 @@ bool BaresipProcess::start(const QString &userDir, const QString &binary)
     }
     const QString listen = QStringLiteral("%1:%2").arg(host()).arg(m_port);
     const QString derivedDir = m_derivedDir.isEmpty() ? defaultDerivedDir() : m_derivedDir;
-    const auto derived = config_deriver::deriveDirectory(userDir, derivedDir, listen, !m_accountsOverride);
+    if (!m_options.recordDir.isEmpty() && !QDir().mkpath(m_options.recordDir)) {
+        m_error = QStringLiteral("cannot create %1").arg(m_options.recordDir);
+        return false;
+    }
+    const auto derived = config_deriver::deriveDirectory(userDir, derivedDir, listen, !m_accountsOverride, m_options);
     if (!derived.ok) {
         m_error = derived.error;
         return false;

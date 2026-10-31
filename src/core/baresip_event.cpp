@@ -16,6 +16,7 @@ std::optional<BaresipEvent> BaresipEvent::fromJson(const QJsonObject &obj)
     ev.peerUri = obj.value(QStringLiteral("peeruri")).toString();
     ev.peerDisplayName = obj.value(QStringLiteral("peerdisplayname")).toString();
     ev.param = obj.value(QStringLiteral("param")).toString();
+    ev.callId = obj.value(QStringLiteral("id")).toString();
     return ev;
 }
 

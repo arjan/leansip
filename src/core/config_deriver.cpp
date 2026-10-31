@@ -26,6 +26,12 @@ const QRegularExpression &ctrlTcpListenLine()
     return re;
 }
 
+const QRegularExpression &sndPathLine()
+{
+    static const QRegularExpression re(QStringLiteral(R"(^\s*snd_path\b)"));
+    return re;
+}
+
 const QRegularExpression &audioPathLine()
 {
     static const QRegularExpression re(QStringLiteral(R"(^\s*audio_path\s+(\S+))"));
@@ -63,7 +69,8 @@ QString userAudioPath(const QString &userConfig)
     return QString(kDefaultAudioPath);
 }
 
-QString deriveConfigText(const QString &userConfig, const QString &listen, const QString &audioPath)
+QString deriveConfigText(const QString &userConfig, const QString &listen, const QString &audioPath,
+                         const Options &options)
 {
     QStringList out;
     const QStringList lines = userConfig.split(u'\n');
@@ -73,6 +80,8 @@ QString deriveConfigText(const QString &userConfig, const QString &listen, const
         if (ctrlTcpListenLine().match(line).hasMatch())
             continue;
         if (audioPathLine().match(line).hasMatch())
+            continue;
+        if (!options.recordDir.isEmpty() && sndPathLine().match(line).hasMatch())
             continue;
         out.append(line);
     }
@@ -90,6 +99,13 @@ QString deriveConfigText(const QString &userConfig, const QString &listen, const
         out.append(QStringLiteral("module_app\t\tmenu.so"));
     if (!hasActiveModule(out, QStringLiteral("debug_cmd")))
         out.append(QStringLiteral("module_app\t\tdebug_cmd.so"));
+    if (!hasActiveModule(out, QStringLiteral("aufile")))
+        out.append(QStringLiteral("module\t\t\taufile.so"));
+    if (!options.recordDir.isEmpty()) {
+        if (!hasActiveModule(out, QStringLiteral("sndfile")))
+            out.append(QStringLiteral("module\t\t\tsndfile.so"));
+        out.append(QStringLiteral("snd_path\t\t%1").arg(options.recordDir));
+    }
     out.append(QStringLiteral("module_app\t\tctrl_tcp.so"));
     out.append(QStringLiteral("ctrl_tcp_listen\t\t%1").arg(listen));
     out.append(QStringLiteral("audio_path\t\t%1").arg(audioPath));
@@ -97,7 +113,8 @@ QString deriveConfigText(const QString &userConfig, const QString &listen, const
     return out.join(u'\n');
 }
 
-Result deriveDirectory(const QString &userDir, const QString &targetDir, const QString &listen, bool linkAccounts)
+Result deriveDirectory(const QString &userDir, const QString &targetDir, const QString &listen, bool linkAccounts,
+                       const Options &options)
 {
     const QDir user(userDir);
     if (!user.exists())
@@ -120,7 +137,7 @@ Result deriveDirectory(const QString &userDir, const QString &targetDir, const Q
     QFile derived(target.filePath(QStringLiteral("config")));
     if (!derived.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
         return {false, {}, {}, QStringLiteral("cannot write %1: %2").arg(derived.fileName(), derived.errorString())};
-    QTextStream(&derived) << deriveConfigText(text, listen, soundsDir);
+    QTextStream(&derived) << deriveConfigText(text, listen, soundsDir, options);
     derived.close();
 
     // Symlink (never copy) the files holding credentials and identity.

@@ -29,6 +29,18 @@ qt_add_library(leansip_core STATIC
     core/ctrl_proxy.h
     core/daemon_client.cpp
     core/daemon_client.h
+    core/wav.cpp
+    core/wav.h
+    core/speech_segmenter.cpp
+    core/speech_segmenter.h
+    core/media_control.cpp
+    core/media_control.h
+    core/elevenlabs.cpp
+    core/elevenlabs.h
+    core/log_file.cpp
+    core/log_file.h
+    core/call_analysis.cpp
+    core/call_analysis.h
 )
 target_include_directories(leansip_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(leansip_core PUBLIC Qt6::Core Qt6::Network PRIVATE leansip_warnings)

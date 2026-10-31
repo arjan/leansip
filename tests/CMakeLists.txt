@@ -22,6 +22,13 @@ leansip_add_test(tst_baresip_process)
 leansip_add_test(tst_call_controller)
 leansip_add_test(tst_single_instance)
 leansip_add_test(tst_ctrl_proxy)
+leansip_add_test(tst_media)
+leansip_add_test(tst_elevenlabs)
 leansip_add_test(tst_unix_signals)
 leansip_add_test(tst_main_window LIBS leansip_ui)
 leansip_add_test(tst_accounts_dialog LIBS leansip_ui)
+
+# End to end with a real baresip on the loopback interface; skipped (77) without baresip.
+add_test(NAME integration_loopback
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration_loopback.sh $<TARGET_FILE_DIR:sipctl>)
+set_tests_properties(integration_loopback PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 180)

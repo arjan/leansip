@@ -2,14 +2,21 @@
 // Every command prints one JSON object per line; exit codes: 0 ok, 1 failed or timed out,
 // 2 usage error, 3 leansipd not running.
 
+#include "core/accounts_parser.h"
+#include "core/call_analysis.h"
 #include "core/call_controller.h"
 #include "core/daemon_client.h"
+#include "core/elevenlabs.h"
 #include "core/profile.h"
+#include "core/speech_segmenter.h"
+#include "core/wav.h"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDeadlineTimer>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -17,6 +24,9 @@
 #include <QRegularExpression>
 #include <QThread>
 
+#include <cerrno>
+#include <cmath>
+#include <csignal>
 #include <cstdio>
 
 using namespace leansip;
@@ -37,64 +47,114 @@ const CommandHelp kCommands[] = {
     {"status", "status", "daemon state; exit 3 when not running",
      R"(Prints the daemon's state as JSON in "data":
   baresipDir, runtimeDir, socket, log   where things are
-  pid, baresipPid                       processes
-  baresipUp                             connected to baresip
+  pid, baresipPid, baresipUp            processes; connected to baresip
   clients                               connected clients (this sipctl included)
   uiOwned, uiAttached                   started by the dialer; dialer still connected
-  sipTrace                              baresip runs with -s (SIP messages in the log)
+  sipTrace, recording, recordingsDir    options the daemon runs with
+  maxCallSeconds                        limit for calls sipctl places or answers
+  allowFile, allowPatterns              which destinations sipctl may dial
+  playing                               call a clip is playing into, if any
   seq                                   last event number
 Not running: {"ok":true,"running":false,...} and exit code 3.)"},
-    {"start", "start [--sip-trace]", "start leansipd for this account (no-op if running)",
-     R"(Starts leansipd in the background and returns once it accepts connections.
+    {"start", "start [--sip-trace] [--record] [--max-call-seconds S]", "start leansipd for this account (no-op if running)",
+     R"(Starts leansipd in the background and returns once baresip is reachable (up to 5 s).
 A daemon started here keeps running until `sipctl stop`.
 
 If the leansip dialer already runs for this account, its daemon is reused. That daemon
 belongs to the dialer and stops when the dialer closes; "status.uiOwned" is then true and
 a "note" says so.
 
---sip-trace  run baresip with -s: every SIP message goes to the log file ("status.log").
-             Only takes effect when this call starts the daemon.
+--sip-trace           every SIP message goes to the log ("status.log")
+--record              record every call, both directions, as WAV (needed by listen/analyze levels)
+--max-call-seconds S  hang up calls sipctl placed or answered after S seconds (default 600, 0 = off)
+These only take effect when this call starts the daemon; otherwise a "warning" says so.
 
 Output: {"ok":true,"started":<bool>,"status":{...}})"},
     {"stop", "stop", "stop leansipd and its baresip (ends calls, unregisters)",
-     R"(Shuts the daemon down. Every client loses its connection and every call ends.
-If the dialer is open, it starts a fresh daemon of its own right away.)"},
-    {"dial", "dial <number|sip-uri>", "place a call",
-     R"(Dials from the first account of the baresip directory. Accepts digits, * # +,
-tel: and sip:/sips: URIs, or user@host[:port]. Anything else (spaces, ';', quotes) is
-rejected before it reaches baresip.
+     R"(Shuts the daemon down and returns once it has exited (up to 10 s), so a following
+`start` can bind the same SIP port. If the dialer is open, it starts a new daemon for itself.)"},
+    {"dial", "dial <number|sip-uri> [--from AOR]", "place a call",
+     R"(Accepts digits, * # +, tel: and sip:/sips: URIs, or user@host[:port]. Anything else
+(spaces, ';', quotes) is rejected before it reaches baresip.
 
-Output: {"ok":true,"seq":12,"data":"call id: 35fa5b711b6ec554"}
-Then:   sipctl wait CALL_ESTABLISHED,CALL_CLOSED --since 12 --timeout 30
+--from AOR  dial from another account of this baresip directory (e.g. sip:bob@example.com);
+            the first account is selected again afterwards.
+
+Destinations must be allowed: loopback ones (…@127.0.0.1) always are, others need a pattern
+in <baresip dir>/sipctl-allow (one per line, * wildcard, e.g. "940" or "*@voiceworks.com").
+The dialer is not subject to this.
+
+Output: {"ok":true,"seq":12,"call":"35fa5b711b6ec554","data":"call id: 35fa5b711b6ec554"}
+Then:   sipctl wait CALL_ESTABLISHED,CALL_CLOSED --call <id> --since 12 --timeout 30
 
 Every dial is a real call on a real account and may cost money.)"},
-    {"answer", "answer", "answer the ringing incoming call",
+    {"answer", "answer [--call ID]", "answer a ringing incoming call",
      R"(Sends baresip's `accept`. Wait for the call first:
-  sipctl wait CALL_INCOMING --timeout 60 && sipctl answer)"},
-    {"hangup", "hangup", "hang up the current call (or reject a ringing one)", R"(Sends baresip's `hangup`.)"},
-    {"dtmf", "dtmf <digits>", "send DTMF digits in the established call",
+  sipctl wait CALL_INCOMING --timeout 60   # prints the event; its "id" is the call)"},
+    {"hangup", "hangup [--call ID]", "hang up a call (or reject a ringing one)",
+     R"(Without --call: baresip's current call. With several calls, pass --call.)"},
+    {"dtmf", "dtmf <digits> [--call ID]", "send DTMF digits in an established call",
      R"(Digits 0-9 * # A-D, sent one at a time 200 ms apart as RFC 4733 events.
-The far end (if it is another leansipd) reports them as CALL_DTMF_START/CALL_DTMF_END.
-Output: {"ok":true,"seq":N,"data":"<digits>"})"},
-    {"calls", "calls", "list active calls", R"(baresip's `listcalls`, ANSI colours stripped, as text in "data".)"},
+The far end (if it is another leansipd) reports them as CALL_DTMF_START/CALL_DTMF_END.)"},
+    {"mute", "mute [--call ID]", "toggle the microphone of a call", R"(baresip's `mute`; replies "call muted" or "call un-muted".)"},
+    {"hold", "hold [--call ID]", "put a call on hold", R"(baresip's `hold` (a re-INVITE).)"},
+    {"resume", "resume [--call ID]", "take a call off hold",
+     R"(baresip 1.1.0 replies "Invalid argument" even when it resumes the call; sipctl reports
+ok when `calls` no longer shows the call on hold.)"},
+    {"calls", "calls", "list active calls", R"(baresip's `listcalls` as text in "data". ">" marks baresip's current call.)"},
     {"reginfo", "reginfo", "registration state of the accounts",
      R"(baresip's `reginfo` as text in "data". A registered account's line contains "OK".)"},
-    {"raw", "raw <command> [params...]", "send any baresip ctrl command",
-     R"(For everything sipctl has no wrapper for. Params are joined with spaces.
-Useful ones:
-  raw callstat          SDP, codecs, RTP/RTCP statistics of the current call
-  raw help              all commands this baresip knows
-  raw hold / raw resume
-  raw uafind <aor>      select the account used by the next dial
-`quit` is refused because it would stop baresip for every client; use `sipctl stop`.)"},
-    {"events", "events [--since N] [--follow]", "print journalled events, optionally keep streaming",
-     R"(Prints one JSON event per line: every event after sequence number N (default 0,
-i.e. all the daemon still keeps; it keeps the last 2000). With --follow it keeps
-printing new events until interrupted.
+    {"say", "say <text> [--call ID] [--wait] [--out FILE]", "speak text into a call (ElevenLabs TTS)",
+     R"(Needs ELEVENLABS_API_KEY. Optional: ELEVENLABS_VOICE_ID (default JBFqnCBsd6RMkjVDRZzb),
+ELEVENLABS_TTS_MODEL (default eleven_multilingual_v2).
 
-Every event has "event":true, "class", "type", "seq" and "ts" (ms since epoch); call
-events also have "accountaor", "direction", "peeruri", "id" (call id) and "param".)"},
-    {"wait", "wait <TYPE[,TYPE...]> [--since N] [--timeout S]", "block until one of these events arrives, print it",
+The speech replaces the call's microphone/source while it plays; the source is switched back
+afterwards. --wait returns when it has finished playing (PLAY_ENDED). --out keeps the
+synthesized audio (16 kHz mono WAV).
+
+Output: {"ok":true,"seq":N,"call":"<id>","seconds":2.4,...})"},
+    {"play", "play <file.wav> [--call ID] [--wait]", "play a WAV file into a call",
+     R"(16-bit PCM WAV, mono or stereo, any rate: it is converted to the call's audio format.
+Like say, it replaces the call's source while playing. --wait returns at PLAY_ENDED.)"},
+    {"listen", "listen [--call ID] [--timeout S] [--silence MS] [--max S] [--threshold DB] [--no-stt] [--language L] [--out FILE]",
+     "wait for the far end to say something and transcribe it (ElevenLabs STT)",
+     R"(Needs a daemon started with --record, and ELEVENLABS_API_KEY unless --no-stt.
+Optional: ELEVENLABS_STT_MODEL (default scribe_v2).
+
+Listens to what the call receives from now on: waits up to --timeout seconds (default 30) for
+speech louder than --threshold dBFS (default -45), then records until --silence ms of quiet
+(default 1200) or --max seconds (default 30), and transcribes that utterance.
+
+Output: {"ok":true,"text":"Welcome to ...","language":"eng","seconds":3.1,"audio":"<wav>",
+         "truncated":false}
+No speech before the timeout: {"ok":false,"error":"no speech ..."}, exit 1.
+--no-stt skips transcription and just returns the utterance's audio file.)"},
+    {"transcribe", "transcribe <file.wav> [--language L]", "transcribe a WAV file (ElevenLabs STT)",
+     R"(Needs ELEVENLABS_API_KEY. The audio is converted to 16 kHz mono before upload.
+Output: {"ok":true,"text":"...","language":"eng","words":[...]})"},
+    {"recordings", "recordings", "recorded calls and their WAV files",
+     R"(Needs a daemon started with --record. "data" maps call ids to {"sent","received"} paths.
+The files live in the runtime directory (cleared at logout); copy what you want to keep.)"},
+    {"analyze", "analyze [--call ID]", "summarise a call: timing, close reason, DTMF, RTCP, audio levels",
+     R"(Default: the most recent call. From the daemon's event journal (last 2000 events):
+  timing        ringingAfterMs, answeredAfterMs, talkMs, totalMs
+  closeReason   e.g. "486 Busy Here", "Connection reset by peer"
+  dtmfReceived  digits the far end sent
+  audio         codec, sample rate, channels
+  rtcp          last RTCP statistics (rtt, rx/tx jitter and loss), max jitter
+  levels        with --record: rmsDbfs, peakDbfs, silentPercent per direction
+  warnings      e.g. one-way audio, packet loss, never answered)"},
+    {"raw", "raw <command> [params...] [--call ID]", "send any baresip ctrl command",
+     R"(For everything sipctl has no wrapper for. Params are joined with spaces; with --call the
+command runs right after selecting that call. `raw help` lists baresip's commands (call
+commands only appear while a call is active). `quit` is refused; use `sipctl stop`.)"},
+    {"events", "events [--since N] [--follow] [--call ID] [--account AOR] [--param TEXT]",
+     "print journalled events, optionally keep streaming",
+     R"(One JSON event per line: every event after sequence number N (default 0: all the daemon
+keeps, the last 2000). --follow keeps printing new events. --call/--account/--param filter
+(param: substring match).)"},
+    {"wait", "wait <TYPE[,TYPE...]> [--since N] [--timeout S] [--call ID] [--account AOR] [--param TEXT]",
+     "block until a matching event arrives, print it",
      R"(Exit 0 and print the first matching event; exit 1 with {"ok":false,"error":"timeout"}
 after S seconds (default 30).
 
@@ -104,9 +164,9 @@ that fires before `wait` starts is not missed:
   seq=$(sipctl dial 940 | jq .seq)
   sipctl wait CALL_ESTABLISHED,CALL_CLOSED --since "$seq" --timeout 30
 
-Common types: CALL_INCOMING CALL_RINGING CALL_PROGRESS CALL_ESTABLISHED CALL_CLOSED
-CALL_DTMF_START CALL_DTMF_END REGISTER_OK REGISTER_FAIL, and leansipd's own
-BACKEND_UP / BACKEND_DOWN (baresip (re)started or went away).)"},
+Types: CALL_INCOMING CALL_RINGING CALL_PROGRESS CALL_ESTABLISHED CALL_CLOSED CALL_DTMF_START
+CALL_DTMF_END CALL_AUDIO REGISTER_OK REGISTER_FAIL, and leansipd's BACKEND_UP BACKEND_DOWN
+PLAY_STARTED PLAY_ENDED RECORDING_STARTED RECORDING_DONE CALL_LIMIT.)"},
     {"help", "help [command]", "this overview, or details on one command", ""},
 };
 
@@ -114,6 +174,7 @@ const char *kOverviewTail = R"(
 Global options:
   -d, --baresip-dir <dir>   which account: the baresip directory (default ~/.baresip).
                             Each directory has its own daemon.
+  --call <id>               the call a command is for (ids are in events and dial replies)
   -h, --help                this help; `sipctl <command> --help` for one command
 
 Output: one JSON object per line on stdout. Replies look like
@@ -122,11 +183,13 @@ where "seq" is the event counter when the command arrived (see `sipctl help wait
 Exit codes: 0 ok, 1 failed or timed out, 2 usage error, 3 leansipd not running.
 
 Example:
-  sipctl -d ~/.baresip2 start
+  sipctl -d ~/.baresip2 start --record
   seq=$(sipctl -d ~/.baresip2 dial 940 | jq .seq)
   sipctl -d ~/.baresip2 wait CALL_ESTABLISHED,CALL_CLOSED --since "$seq"
-  sipctl -d ~/.baresip2 dtmf 1
+  sipctl -d ~/.baresip2 listen                  # what did the bot say?
+  sipctl -d ~/.baresip2 say "I'd like to speak to support" --wait
   sipctl -d ~/.baresip2 hangup
+  sipctl -d ~/.baresip2 analyze
 
 Full reference: docs/sipctl.md in the leansip source tree.)";
 
@@ -143,8 +206,10 @@ QString overview()
 {
     QString out = QStringLiteral("sipctl: control leansipd, the daemon that shares baresip between the leansip\n"
                                  "dialer, scripts and agents.\n\nUsage: sipctl [-d DIR] <command> [args] [options]\n\nCommands:\n");
-    for (const CommandHelp &c : kCommands)
-        out += QStringLiteral("  %1%2\n").arg(QString::fromUtf8(c.synopsis).leftJustified(48), QString::fromUtf8(c.summary));
+    for (const CommandHelp &c : kCommands) {
+        const QString synopsis = QString::fromUtf8(c.synopsis).section(u' ', 0, 1);
+        out += QStringLiteral("  %1%2\n").arg(synopsis.leftJustified(24), QString::fromUtf8(c.summary));
+    }
     return out + QString::fromUtf8(kOverviewTail);
 }
 
@@ -192,10 +257,176 @@ QJsonValue dataValue(const QString &data)
     return stripAnsi(data);
 }
 
-int printReply(const daemon::Reply &reply)
+int printReply(const daemon::Reply &reply, QJsonObject extra = {})
 {
-    printJson({{QStringLiteral("ok"), reply.ok}, {QStringLiteral("seq"), reply.seq}, {QStringLiteral("data"), dataValue(reply.data)}});
+    extra[QStringLiteral("ok")] = reply.ok;
+    extra[QStringLiteral("seq")] = reply.seq;
+    extra[QStringLiteral("data")] = dataValue(reply.data);
+    printJson(extra);
     return reply.ok ? Ok : Failed;
+}
+
+QString callIdFrom(const QString &data)
+{
+    static const QRegularExpression re(QStringLiteral(R"(call id:\s*(\S+))"));
+    const auto m = re.match(data);
+    return m.hasMatch() ? m.captured(1) : QString();
+}
+
+QString currentCallId(const QString &listcalls)
+{
+    static const QRegularExpression re(QStringLiteral(R"(^>\s*\[line \d+, id (\S+?)\])"), QRegularExpression::MultilineOption);
+    const auto m = re.match(stripAnsi(listcalls));
+    return m.hasMatch() ? m.captured(1) : QString();
+}
+
+bool processAlive(qint64 pid)
+{
+    return pid > 0 && (::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM);
+}
+
+QString compact(const QJsonArray &array)
+{
+    return QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact));
+}
+
+struct Session {
+    daemon::Connection c;
+    QString error;
+
+    std::optional<daemon::Reply> request(const QString &command, const QString &params = {}, int timeoutMs = 5000)
+    {
+        return c.request(command, params, timeoutMs, &error);
+    }
+
+    // Runs the steps back to back in leansipd. `results` gets one {command, ok, data} per step
+    // that ran; the reply's data is the last of them, `ok` is true when every step succeeded.
+    std::optional<daemon::Reply> sequence(const QList<QPair<QString, QString>> &steps, QJsonArray *results = nullptr)
+    {
+        QJsonArray array;
+        for (const auto &s : steps)
+            array.append(QJsonArray{s.first, s.second});
+        auto reply = request(QStringLiteral("leansipd_seq"), compact(array), 10000);
+        if (!reply)
+            return reply;
+        const QJsonArray r = QJsonDocument::fromJson(reply->data.toUtf8()).array();
+        if (results)
+            *results = r;
+        if (!r.isEmpty())
+            reply->data = r.last().toObject().value(QStringLiteral("data")).toString();
+        return reply;
+    }
+
+    // `command` for `callId` (when given), otherwise for baresip's current call.
+    std::optional<daemon::Reply> forCall(const QString &callId, const QString &command, const QString &params = {})
+    {
+        if (callId.isEmpty())
+            return request(command, params, 10000);
+        return sequence({{QStringLiteral("callfind"), callId}, {command, params}});
+    }
+
+    QJsonArray events(qint64 since)
+    {
+        const auto reply = request(QStringLiteral("leansipd_events"), QString::number(since));
+        return reply && reply->ok ? QJsonDocument::fromJson(reply->data.toUtf8()).array() : QJsonArray{};
+    }
+
+    QJsonObject recordings()
+    {
+        const auto reply = request(QStringLiteral("leansipd_recordings"));
+        return reply && reply->ok ? QJsonDocument::fromJson(reply->data.toUtf8()).object() : QJsonObject{};
+    }
+
+    QString resolveCall(const QString &given)
+    {
+        if (!given.isEmpty())
+            return given;
+        const auto reply = request(QStringLiteral("listcalls"));
+        return reply && reply->ok ? currentCallId(reply->data) : QString();
+    }
+};
+
+struct EventFilter {
+    QStringList types;
+    QString call;
+    QString account;
+    QString param;
+
+    bool matches(const QJsonObject &ev) const
+    {
+        if (!types.isEmpty() && !types.contains(ev.value(QStringLiteral("type")).toString()))
+            return false;
+        if (!call.isEmpty() && ev.value(QStringLiteral("id")).toString() != call)
+            return false;
+        if (!account.isEmpty() && ev.value(QStringLiteral("accountaor")).toString() != account)
+            return false;
+        if (!param.isEmpty() && !ev.value(QStringLiteral("param")).toString().contains(param, Qt::CaseInsensitive))
+            return false;
+        return true;
+    }
+};
+
+// Blocks until an event matching `filter` arrives: with since >= 0 also one already journalled
+// after `since`, otherwise only a new one.
+std::optional<QJsonObject> waitFor(Session &s, const EventFilter &filter, qint64 since, int timeoutMs)
+{
+    qint64 lastSeen = since;
+    if (since >= 0) {
+        for (const QJsonValue &v : s.events(since)) {
+            const QJsonObject ev = v.toObject();
+            lastSeen = std::max(lastSeen, ev.value(QStringLiteral("seq")).toInteger());
+            if (filter.matches(ev))
+                return ev;
+        }
+    }
+    const QDeadlineTimer deadline(timeoutMs);
+    while (!deadline.hasExpired()) {
+        const auto ev = s.c.nextEvent(static_cast<int>(qMin<qint64>(deadline.remainingTime(), 1000)));
+        if (!ev) {
+            if (!s.c.isOpen())
+                return std::nullopt;
+            continue;
+        }
+        const qint64 seq = ev->value(QStringLiteral("seq")).toInteger();
+        if (seq <= lastSeen)
+            continue;
+        lastSeen = seq;
+        if (filter.matches(*ev))
+            return ev;
+    }
+    return std::nullopt;
+}
+
+QString mediaPath(const QString &baresipDir, const QString &stem)
+{
+    const QString dir = QDir(profile::runtimeDir(baresipDir)).filePath(QStringLiteral("media"));
+    QDir().mkpath(dir);
+    return QDir(dir).filePath(QStringLiteral("%1-%2-%3.wav")
+                                  .arg(stem)
+                                  .arg(QCoreApplication::applicationPid())
+                                  .arg(QDateTime::currentMSecsSinceEpoch()));
+}
+
+// Uploads a 16 kHz mono copy (small, and all speech recognition needs).
+std::optional<QJsonObject> transcribeFile(const QString &path, const QString &language, QString *error)
+{
+    const auto config = elevenlabs::Config::fromEnvironment(error);
+    if (!config)
+        return std::nullopt;
+    const auto pcm = wav::readFile(path, error);
+    if (!pcm)
+        return std::nullopt;
+    const QString upload = QDir(QDir::tempPath()).filePath(QStringLiteral("sipctl-stt-%1.wav").arg(QCoreApplication::applicationPid()));
+    if (!wav::writeFile(upload, wav::convert(*pcm, 16000, 1), error))
+        return std::nullopt;
+    const auto t = elevenlabs::transcribe(*config, upload, error, language);
+    QFile::remove(upload);
+    if (!t)
+        return std::nullopt;
+    return QJsonObject{{QStringLiteral("text"), t->text},
+                       {QStringLiteral("language"), t->languageCode},
+                       {QStringLiteral("languageProbability"), t->languageProbability},
+                       {QStringLiteral("words"), t->words}};
 }
 
 } // namespace
@@ -204,20 +435,36 @@ int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("sipctl"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.0"));
 
     QCommandLineParser parser;
     parser.addVersionOption();
+    auto valueOpt = [](const char *name, const char *desc, const char *value, const QString &def = {}) {
+        return QCommandLineOption(QString::fromLatin1(name), QString::fromLatin1(desc), QString::fromLatin1(value), def);
+    };
     const QCommandLineOption helpOpt({QStringLiteral("h"), QStringLiteral("help")}, QStringLiteral("help"));
     const QCommandLineOption dirOpt({QStringLiteral("d"), QStringLiteral("baresip-dir")},
                                     QStringLiteral("baresip config directory (selects the account/daemon)"),
                                     QStringLiteral("dir"), profile::defaultBaresipDir());
-    const QCommandLineOption sinceOpt(QStringLiteral("since"), QStringLiteral("event sequence number"), QStringLiteral("seq"));
-    const QCommandLineOption timeoutOpt(QStringLiteral("timeout"), QStringLiteral("seconds (wait; default 30)"),
-                                        QStringLiteral("s"), QStringLiteral("30"));
+    const QCommandLineOption sinceOpt = valueOpt("since", "event sequence number", "seq");
+    const QCommandLineOption timeoutOpt = valueOpt("timeout", "seconds", "s", QStringLiteral("30"));
     const QCommandLineOption followOpt(QStringLiteral("follow"), QStringLiteral("keep streaming events"));
     const QCommandLineOption traceOpt(QStringLiteral("sip-trace"), QStringLiteral("start: log SIP messages"));
-    parser.addOptions({helpOpt, dirOpt, sinceOpt, timeoutOpt, followOpt, traceOpt});
+    const QCommandLineOption recordOpt(QStringLiteral("record"), QStringLiteral("start: record calls"));
+    const QCommandLineOption maxCallOpt = valueOpt("max-call-seconds", "start: call limit", "s");
+    const QCommandLineOption callOpt = valueOpt("call", "call id", "id");
+    const QCommandLineOption fromOpt = valueOpt("from", "account to dial from", "aor");
+    const QCommandLineOption accountOpt = valueOpt("account", "filter: account aor", "aor");
+    const QCommandLineOption paramOpt = valueOpt("param", "filter: param substring", "text");
+    const QCommandLineOption waitOpt(QStringLiteral("wait"), QStringLiteral("say/play: wait until played"));
+    const QCommandLineOption outOpt = valueOpt("out", "keep audio here", "file");
+    const QCommandLineOption languageOpt = valueOpt("language", "STT language code", "code");
+    const QCommandLineOption silenceOpt = valueOpt("silence", "listen: ms of quiet that ends speech", "ms", QStringLiteral("1200"));
+    const QCommandLineOption maxOpt = valueOpt("max", "listen: max utterance seconds", "s", QStringLiteral("30"));
+    const QCommandLineOption thresholdOpt = valueOpt("threshold", "listen: speech level dBFS", "db", QStringLiteral("-45"));
+    const QCommandLineOption noSttOpt(QStringLiteral("no-stt"), QStringLiteral("listen: skip transcription"));
+    parser.addOptions({helpOpt, dirOpt, sinceOpt, timeoutOpt, followOpt, traceOpt, recordOpt, maxCallOpt, callOpt, fromOpt,
+                       accountOpt, paramOpt, waitOpt, outOpt, languageOpt, silenceOpt, maxOpt, thresholdOpt, noSttOpt});
     if (!parser.parse(QCoreApplication::arguments())) {
         printText(QStringLiteral("sipctl: %1\nRun `sipctl help` for usage.").arg(parser.errorText()), stderr);
         return Usage;
@@ -252,40 +499,58 @@ int main(int argc, char *argv[])
     const QStringList rest = args.mid(1);
     const QString baresipDir = QDir(parser.value(dirOpt)).absolutePath();
     const QString socketPath = profile::socketPath(baresipDir);
+    const QString callArg = parser.value(callOpt);
 
     bool sinceOk = true;
     const qint64 since = parser.isSet(sinceOpt) ? parser.value(sinceOpt).toLongLong(&sinceOk) : -1;
     if (!sinceOk)
         return fail(QStringLiteral("--since expects a number"), Usage);
+    bool timeoutOk = false;
+    const double timeoutSeconds = parser.value(timeoutOpt).toDouble(&timeoutOk);
+    if (!timeoutOk || timeoutSeconds < 0)
+        return fail(QStringLiteral("--timeout expects seconds"), Usage);
+    const int timeoutMs = static_cast<int>(timeoutSeconds * 1000);
 
     if (command == QLatin1String("start")) {
+        QStringList daemonArgs;
+        if (parser.isSet(traceOpt))
+            daemonArgs << QStringLiteral("--sip-trace");
+        if (parser.isSet(recordOpt))
+            daemonArgs << QStringLiteral("--record");
+        if (parser.isSet(maxCallOpt))
+            daemonArgs << QStringLiteral("--max-call-seconds") << parser.value(maxCallOpt);
         QString error;
         bool started = false;
-        const QStringList daemonArgs = parser.isSet(traceOpt) ? QStringList{QStringLiteral("--sip-trace")} : QStringList{};
         if (!daemon::ensureRunning(baresipDir, daemonArgs, &error, &started))
             return fail(error);
-        daemon::Connection c;
-        if (!c.open(socketPath, 2000, &error))
-            return fail(error, NotRunning);
+        Session s;
+        if (!s.c.open(socketPath, 2000, &s.error))
+            return fail(s.error, NotRunning);
         // Return only once baresip is reachable, so the next command does not race its startup.
         std::optional<daemon::Reply> status;
         const QDeadlineTimer upDeadline(5000);
         for (;;) {
-            status = c.request(QStringLiteral("leansipd_status"), {}, 2000, &error);
+            status = s.request(QStringLiteral("leansipd_status"));
             if (!status)
-                return fail(error);
+                return fail(s.error);
             if (dataValue(status->data).toObject().value(QStringLiteral("baresipUp")).toBool() || upDeadline.hasExpired())
                 break;
             QThread::msleep(100);
         }
-        QJsonObject out{{QStringLiteral("ok"), true}, {QStringLiteral("started"), started},
-                        {QStringLiteral("status"), dataValue(status->data)}};
-        if (!dataValue(status->data).toObject().value(QStringLiteral("baresipUp")).toBool())
-            out[QStringLiteral("warning")] = QStringLiteral("baresip is not up yet; check the log");
-        if (dataValue(status->data).toObject().value(QStringLiteral("uiOwned")).toBool())
+        const QJsonObject st = dataValue(status->data).toObject();
+        QJsonObject out{{QStringLiteral("ok"), true}, {QStringLiteral("started"), started}, {QStringLiteral("status"), st}};
+        QStringList warnings;
+        if (!st.value(QStringLiteral("baresipUp")).toBool())
+            warnings << QStringLiteral("baresip is not up yet; check the log");
+        if (!started && ((parser.isSet(traceOpt) && !st.value(QStringLiteral("sipTrace")).toBool())
+                         || (parser.isSet(recordOpt) && !st.value(QStringLiteral("recording")).toBool())
+                         || (parser.isSet(maxCallOpt)
+                             && st.value(QStringLiteral("maxCallSeconds")).toInt() != parser.value(maxCallOpt).toInt())))
+            warnings << QStringLiteral("already running with other options; `sipctl stop` first to change them");
+        if (!warnings.isEmpty())
+            out[QStringLiteral("warning")] = warnings.join(QStringLiteral("; "));
+        if (st.value(QStringLiteral("uiOwned")).toBool())
             out[QStringLiteral("note")] = QStringLiteral("this daemon belongs to the open leansip dialer and stops when it closes");
-        if (!started && parser.isSet(traceOpt) && !dataValue(status->data).toObject().value(QStringLiteral("sipTrace")).toBool())
-            out[QStringLiteral("warning")] = QStringLiteral("already running without --sip-trace; stop it first to trace");
         printJson(out);
         return Ok;
     }
@@ -293,61 +558,133 @@ int main(int argc, char *argv[])
     if (!findCommand(command))
         return fail(QStringLiteral("unknown command '%1'; see `sipctl help`").arg(command), Usage);
 
-    daemon::Connection c;
-    QString error;
+    // transcribe needs no daemon.
+    if (command == QLatin1String("transcribe")) {
+        if (rest.size() != 1)
+            return fail(QStringLiteral("usage: sipctl transcribe <file.wav>"), Usage);
+        QString error;
+        const auto t = transcribeFile(rest.first(), parser.value(languageOpt), &error);
+        if (!t)
+            return fail(error);
+        QJsonObject out = *t;
+        out[QStringLiteral("ok")] = true;
+        printJson(out);
+        return Ok;
+    }
+
+    Session s;
     if (!QFileInfo::exists(socketPath))
-        error = QStringLiteral("leansipd is not running for %1").arg(baresipDir);
-    if (!error.isEmpty() || !c.open(socketPath, 1000, &error)) {
+        s.error = QStringLiteral("leansipd is not running for %1").arg(baresipDir);
+    if (!s.error.isEmpty() || !s.c.open(socketPath, 1000, &s.error)) {
         if (command == QLatin1String("status")) {
             printJson({{QStringLiteral("ok"), true}, {QStringLiteral("running"), false}, {QStringLiteral("socket"), socketPath}});
             return NotRunning;
         }
-        return fail(error + QStringLiteral("; run `sipctl -d %1 start` first").arg(baresipDir), NotRunning);
+        return fail(s.error + QStringLiteral("; run `sipctl -d %1 start` first").arg(baresipDir), NotRunning);
     }
-
-    auto simple = [&](const QString &cmd, const QString &params = {}, int timeoutMs = 5000) {
-        const auto reply = c.request(cmd, params, timeoutMs, &error);
-        return reply ? printReply(*reply) : fail(error);
+    auto replyOrFail = [&](const std::optional<daemon::Reply> &reply, QJsonObject extra = {}) {
+        return reply ? printReply(*reply, std::move(extra)) : fail(s.error);
     };
 
     if (command == QLatin1String("status"))
-        return simple(QStringLiteral("leansipd_status"));
-    if (command == QLatin1String("stop"))
-        return simple(QStringLiteral("leansipd_shutdown"));
-    if (command == QLatin1String("answer"))
-        return simple(QStringLiteral("accept"));
-    if (command == QLatin1String("hangup"))
-        return simple(QStringLiteral("hangup"));
+        return replyOrFail(s.request(QStringLiteral("leansipd_status")));
+    if (command == QLatin1String("stop")) {
+        const auto status = s.request(QStringLiteral("leansipd_status"));
+        const qint64 pid = status ? dataValue(status->data).toObject().value(QStringLiteral("pid")).toInteger() : 0;
+        const auto reply = s.request(QStringLiteral("leansipd_shutdown"));
+        if (!reply || !reply->ok)
+            return replyOrFail(reply);
+        // The daemon exits after its baresip has, so its SIP port is free once it is gone.
+        const QDeadlineTimer deadline(10000);
+        while (processAlive(pid) && !deadline.hasExpired())
+            QThread::msleep(50);
+        if (processAlive(pid))
+            return fail(QStringLiteral("leansipd (pid %1) did not exit within 10 s").arg(pid));
+        return printReply(*reply);
+    }
     if (command == QLatin1String("calls"))
-        return simple(QStringLiteral("listcalls"));
+        return replyOrFail(s.request(QStringLiteral("listcalls")));
     if (command == QLatin1String("reginfo"))
-        return simple(QStringLiteral("reginfo"));
+        return replyOrFail(s.request(QStringLiteral("reginfo")));
+    if (command == QLatin1String("recordings"))
+        return replyOrFail(s.request(QStringLiteral("leansipd_recordings")));
+
+    if (command == QLatin1String("answer") || command == QLatin1String("hangup") || command == QLatin1String("mute")
+        || command == QLatin1String("hold")) {
+        const QString baresipCommand = command == QLatin1String("answer") ? QStringLiteral("accept") : command;
+        return replyOrFail(s.forCall(callArg, baresipCommand));
+    }
+    if (command == QLatin1String("resume")) {
+        auto reply = s.forCall(callArg, QStringLiteral("resume"));
+        if (!reply)
+            return fail(s.error);
+        if (!reply->ok && reply->data.contains(QLatin1String("Invalid argument"))) {
+            // baresip 1.1.0 reports this even when it resumed; check the call list instead.
+            QThread::msleep(300);
+            const auto calls = s.request(QStringLiteral("listcalls"));
+            if (calls && calls->ok) {
+                const QString id = callArg.isEmpty() ? currentCallId(calls->data) : callArg;
+                bool held = false;
+                for (const QString &line : stripAnsi(calls->data).split(u'\n'))
+                    held = held || (!id.isEmpty() && line.contains(id) && line.contains(QLatin1String("on hold")));
+                if (!held && !id.isEmpty()) {
+                    reply->ok = true;
+                    reply->data = QStringLiteral("resumed");
+                }
+            }
+        }
+        return printReply(*reply);
+    }
 
     if (command == QLatin1String("dial")) {
         if (rest.size() != 1)
-            return fail(QStringLiteral("usage: sipctl dial <number|sip-uri>"), Usage);
+            return fail(QStringLiteral("usage: sipctl dial <number|sip-uri> [--from AOR]"), Usage);
         QString target = rest.first().trimmed();
         if (target.startsWith(QLatin1String("tel:"), Qt::CaseInsensitive))
             target = target.mid(4);
         // Same whitelist as the dialer: the string goes verbatim to baresip's command parser.
         if (!CallController::isValidNumber(target))
             return fail(QStringLiteral("invalid number or URI '%1'").arg(target), Usage);
-        return simple(QStringLiteral("dial"), target);
+        std::optional<daemon::Reply> reply;
+        if (parser.isSet(fromOpt)) {
+            AccountsFile accountsFile;
+            QString err;
+            accounts::readFile(QDir(baresipDir).filePath(QStringLiteral("accounts")), &accountsFile, &err);
+            QList<QPair<QString, QString>> steps{{QStringLiteral("uafind"), parser.value(fromOpt)}, {QStringLiteral("dial"), target}};
+            if (!accountsFile.accounts.isEmpty())
+                steps.append({QStringLiteral("uafind"), accountsFile.accounts.first().aor()});
+            QJsonArray results;
+            reply = s.sequence(steps, &results);
+            if (reply && results.size() >= 2) {
+                // The dial step decides; selecting the first account again is housekeeping.
+                const QJsonObject dialResult = results.at(1).toObject();
+                reply->ok = dialResult.value(QStringLiteral("ok")).toBool();
+                reply->data = dialResult.value(QStringLiteral("data")).toString();
+            }
+        } else {
+            reply = s.request(QStringLiteral("dial"), target, 10000);
+        }
+        if (!reply)
+            return fail(s.error);
+        QJsonObject extra;
+        if (const QString id = callIdFrom(reply->data); !id.isEmpty())
+            extra[QStringLiteral("call")] = id;
+        return printReply(*reply, extra);
     }
 
     if (command == QLatin1String("dtmf")) {
         static const QRegularExpression digitsRe(QStringLiteral("^[0-9*#A-D]+$"));
         if (rest.size() != 1 || !digitsRe.match(rest.first()).hasMatch())
-            return fail(QStringLiteral("usage: sipctl dtmf <digits 0-9*#A-D>"), Usage);
+            return fail(QStringLiteral("usage: sipctl dtmf <digits 0-9*#A-D> [--call ID]"), Usage);
         // One digit at a time, spaced so each gets its own RFC 4733 event.
         const QString digits = rest.first();
         qint64 seq = 0;
         for (qsizetype i = 0; i < digits.size(); ++i) {
             if (i > 0)
                 QThread::msleep(200);
-            const auto reply = c.request(QStringLiteral("sndcode"), QString(digits.at(i)), 5000, &error);
+            const auto reply = s.forCall(callArg, QStringLiteral("sndcode"), QString(digits.at(i)));
             if (!reply)
-                return fail(error);
+                return fail(s.error);
             if (!reply->ok)
                 return printReply(*reply);
             if (i == 0)
@@ -360,68 +697,233 @@ int main(int argc, char *argv[])
     if (command == QLatin1String("raw")) {
         if (rest.isEmpty())
             return fail(QStringLiteral("usage: sipctl raw <command> [params...]"), Usage);
-        return simple(rest.first(), rest.mid(1).join(u' '), 15000);
+        if (rest.first() == QLatin1String("leansipd_hello") || rest.first() == QLatin1String("leansipd_bind"))
+            return fail(QStringLiteral("%1 is reserved for the dialer").arg(rest.first()), Usage);
+        return replyOrFail(s.forCall(callArg, rest.first(), rest.mid(1).join(u' ')));
+    }
+
+    if (command == QLatin1String("say") || command == QLatin1String("play")) {
+        const bool say = command == QLatin1String("say");
+        const QString usage = say ? QStringLiteral("usage: sipctl say <text> [--call ID] [--wait]")
+                                  : QStringLiteral("usage: sipctl play <file.wav> [--call ID] [--wait]");
+        if (rest.isEmpty() || (!say && rest.size() != 1))
+            return fail(usage, Usage);
+        QString file;
+        bool temporary = false;
+        if (say) {
+            QString error;
+            const auto config = elevenlabs::Config::fromEnvironment(&error);
+            if (!config)
+                return fail(error);
+            const auto pcm = elevenlabs::synthesize(*config, rest.join(u' '), &error);
+            if (!pcm)
+                return fail(error);
+            temporary = !parser.isSet(outOpt);
+            file = temporary ? mediaPath(baresipDir, QStringLiteral("say")) : QFileInfo(parser.value(outOpt)).absoluteFilePath();
+            if (!wav::writeFile(file, wav::fromRaw(*pcm, elevenlabs::kTtsSampleRate, 1), &error))
+                return fail(error);
+        } else {
+            file = QFileInfo(rest.first()).absoluteFilePath();
+        }
+        const QJsonObject req{{QStringLiteral("file"), file}, {QStringLiteral("call"), callArg}};
+        const auto reply = s.request(QStringLiteral("leansipd_play"),
+                                     QString::fromUtf8(QJsonDocument(req).toJson(QJsonDocument::Compact)), 10000);
+        if (temporary)
+            QFile::remove(file); // leansipd has made its own converted copy by the time it replies
+        if (!reply)
+            return fail(s.error);
+        if (!reply->ok)
+            return printReply(*reply);
+        QJsonObject out = dataValue(reply->data).toObject();
+        out[QStringLiteral("ok")] = true;
+        out[QStringLiteral("seq")] = reply->seq;
+        out[QStringLiteral("call")] = out.take(QStringLiteral("id"));
+        if (say && !temporary)
+            out[QStringLiteral("audio")] = file;
+        if (parser.isSet(waitOpt)) {
+            const double seconds = out.value(QStringLiteral("seconds")).toDouble();
+            const EventFilter f{{QStringLiteral("PLAY_ENDED")}, out.value(QStringLiteral("call")).toString(), {}, {}};
+            const auto ended = waitFor(s, f, reply->seq, static_cast<int>(seconds * 1000) + 10000);
+            if (!ended)
+                return fail(QStringLiteral("playback did not report its end"));
+            out[QStringLiteral("ended")] = ended->value(QStringLiteral("param"));
+        }
+        printJson(out);
+        return Ok;
+    }
+
+    if (command == QLatin1String("listen")) {
+        if (!parser.isSet(noSttOpt)) {
+            QString error;
+            if (!elevenlabs::Config::fromEnvironment(&error))
+                return fail(error + QStringLiteral(" (or pass --no-stt)"));
+        }
+        bool ok1 = false, ok2 = false, ok3 = false;
+        SpeechSegmenter::Params params;
+        params.silenceMs = parser.value(silenceOpt).toInt(&ok1);
+        params.maxMs = static_cast<int>(parser.value(maxOpt).toDouble(&ok2) * 1000);
+        params.thresholdDbfs = parser.value(thresholdOpt).toDouble(&ok3);
+        if (!ok1 || !ok2 || !ok3 || params.silenceMs <= 0 || params.maxMs <= 0)
+            return fail(QStringLiteral("--silence, --max and --threshold expect numbers"), Usage);
+
+        const auto status = s.request(QStringLiteral("leansipd_status"));
+        if (status && !dataValue(status->data).toObject().value(QStringLiteral("recording")).toBool())
+            return fail(QStringLiteral("recording is off: listen needs a daemon started with --record "
+                                       "(`sipctl stop`, then `sipctl start --record`)"));
+        const QString callId = s.resolveCall(callArg);
+        if (callId.isEmpty())
+            return fail(QStringLiteral("no call to listen to"));
+        // The recording appears once the call's audio starts; give it a moment.
+        QString received;
+        const QDeadlineTimer recDeadline(3000);
+        for (;;) {
+            received = s.recordings().value(callId).toObject().value(QStringLiteral("received")).toString();
+            if (!received.isEmpty() || recDeadline.hasExpired())
+                break;
+            QThread::msleep(100);
+        }
+        if (received.isEmpty())
+            return fail(QStringLiteral("no recording for call %1 yet (is its audio running?)").arg(callId));
+
+        QFile f(received);
+        if (!f.open(QIODevice::ReadOnly))
+            return fail(QStringLiteral("cannot open %1: %2").arg(received, f.errorString()));
+        QString error;
+        const auto header = wav::readHeader(f, f.size(), &error);
+        if (!header || header->bitsPerSample != 16 || header->channels < 1)
+            return fail(error.isEmpty() ? QStringLiteral("unexpected recording format") : error);
+        const qint64 bytesPerFrame = 2LL * header->channels;
+        const qint64 frameLen = static_cast<qint64>(header->sampleRate) * params.frameMs / 1000; // per channel, 20 ms
+        const qint64 chunkBytes = bytesPerFrame * frameLen;
+        // From now on: start at the current end of the file, on a 20 ms boundary.
+        qint64 pos = header->dataOffset + ((f.size() - header->dataOffset) / chunkBytes) * chunkBytes;
+
+        SpeechSegmenter seg(params);
+        wav::Pcm heard;
+        heard.sampleRate = header->sampleRate;
+        heard.channels = header->channels;
+        const EventFilter closedFilter{{QStringLiteral("CALL_CLOSED")}, callId, {}, {}};
+        const QDeadlineTimer waitDeadline(timeoutMs);
+        bool callClosed = false;
+        while (seg.state() != SpeechSegmenter::State::Done) {
+            const qint64 chunk = ((f.size() - pos) / chunkBytes) * chunkBytes;
+            if (chunk > 0) {
+                f.seek(pos);
+                const wav::Pcm part = wav::fromRaw(f.read(chunk), header->sampleRate, header->channels);
+                pos += chunk;
+                heard.samples += part.samples;
+                for (double level : wav::frameLevels(part, params.frameMs)) {
+                    if (seg.feed(level) == SpeechSegmenter::State::Done)
+                        break;
+                }
+                continue;
+            }
+            if (seg.state() == SpeechSegmenter::State::Waiting && waitDeadline.hasExpired())
+                return fail(QStringLiteral("no speech within %1 s").arg(timeoutSeconds));
+            if (callClosed)
+                break;
+            // Poll the file every 50 ms; notice the call closing meanwhile.
+            if (const auto ev = s.c.nextEvent(50); ev && closedFilter.matches(*ev))
+                callClosed = true;
+        }
+        if (seg.state() == SpeechSegmenter::State::Waiting)
+            return fail(QStringLiteral("the call ended before anything was said"));
+        const qint64 endFrame = seg.state() == SpeechSegmenter::State::Done ? seg.endFrame() : seg.framesSeen();
+        wav::Pcm utterance;
+        utterance.sampleRate = heard.sampleRate;
+        utterance.channels = heard.channels;
+        const qint64 from = seg.startFrame() * frameLen * heard.channels;
+        const qint64 to = std::min<qint64>(endFrame * frameLen * heard.channels, heard.samples.size());
+        utterance.samples = heard.samples.mid(from, to - from);
+        const wav::Pcm mono = wav::convert(utterance, 16000, 1);
+        const QString out = parser.isSet(outOpt) ? QFileInfo(parser.value(outOpt)).absoluteFilePath()
+                                                 : mediaPath(baresipDir, QStringLiteral("heard"));
+        if (!wav::writeFile(out, mono, &error))
+            return fail(error);
+        QJsonObject result{{QStringLiteral("ok"), true},
+                           {QStringLiteral("call"), callId},
+                           {QStringLiteral("seconds"), std::round(mono.seconds() * 10) / 10},
+                           {QStringLiteral("audio"), out},
+                           {QStringLiteral("truncated"), seg.truncated()},
+                           {QStringLiteral("callClosed"), callClosed}};
+        if (!parser.isSet(noSttOpt)) {
+            const auto t = transcribeFile(out, parser.value(languageOpt), &error);
+            if (!t)
+                return fail(error);
+            result[QStringLiteral("text")] = t->value(QStringLiteral("text"));
+            result[QStringLiteral("language")] = t->value(QStringLiteral("language"));
+        }
+        printJson(result);
+        return Ok;
+    }
+
+    if (command == QLatin1String("analyze")) {
+        const QJsonArray events = s.events(0);
+        const QString callId = callArg.isEmpty() ? analysis::lastCallId(events) : callArg;
+        if (callId.isEmpty())
+            return fail(QStringLiteral("no call in the event journal"));
+        std::optional<wav::Levels> sent, received;
+        const QJsonObject files = s.recordings().value(callId).toObject();
+        QString error;
+        if (const QString p = files.value(QStringLiteral("sent")).toString(); !p.isEmpty()) {
+            if (const auto pcm = wav::readFile(p, &error))
+                sent = wav::measure(*pcm);
+        }
+        if (const QString p = files.value(QStringLiteral("received")).toString(); !p.isEmpty()) {
+            if (const auto pcm = wav::readFile(p, &error))
+                received = wav::measure(*pcm);
+        }
+        QJsonObject result = analysis::analyzeCall(events, callId, sent, received);
+        if (!result.value(QStringLiteral("found")).toBool())
+            return fail(QStringLiteral("call %1 is not in the event journal").arg(callId));
+        result.remove(QStringLiteral("found"));
+        result[QStringLiteral("ok")] = true;
+        if (!files.isEmpty())
+            result[QStringLiteral("recordings")] = files;
+        printJson(result);
+        return Ok;
     }
 
     if (command == QLatin1String("events") || command == QLatin1String("wait")) {
-        const bool waiting = command == QLatin1String("wait");
-        QStringList types;
-        if (waiting) {
+        EventFilter filter{{}, callArg, parser.value(accountOpt), parser.value(paramOpt)};
+        if (command == QLatin1String("wait")) {
             if (rest.size() != 1)
                 return fail(QStringLiteral("usage: sipctl wait <TYPE[,TYPE...]> [--since N] [--timeout S]"), Usage);
-            types = rest.first().split(u',', Qt::SkipEmptyParts);
-        }
-        auto matches = [&](const QJsonObject &ev) {
-            return !waiting || types.contains(ev.value(QStringLiteral("type")).toString());
-        };
-
-        // Subscribed from here on (we are connected); the journal covers what came before.
-        qint64 lastSeen = since;
-        if (since >= 0 || !waiting) {
-            const auto reply = c.request(QStringLiteral("leansipd_events"), QString::number(qMax<qint64>(since, 0)), 5000, &error);
-            if (!reply || !reply->ok)
-                return fail(reply ? reply->data : error);
-            const QJsonArray journal = QJsonDocument::fromJson(reply->data.toUtf8()).array();
-            for (const QJsonValue &v : journal) {
-                const QJsonObject ev = v.toObject();
-                lastSeen = qMax(lastSeen, ev.value(QStringLiteral("seq")).toInteger());
-                if (!matches(ev))
-                    continue;
-                printJson(ev);
-                if (waiting)
-                    return Ok;
-            }
-            if (!waiting && !parser.isSet(followOpt))
+            filter.types = rest.first().split(u',', Qt::SkipEmptyParts);
+            const auto ev = waitFor(s, filter, since, timeoutMs);
+            if (ev) {
+                printJson(*ev);
                 return Ok;
+            }
+            if (!s.c.isOpen())
+                return fail(QStringLiteral("leansipd closed the connection"));
+            printJson({{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("timeout")},
+                       {QStringLiteral("waitedFor"), QJsonArray::fromStringList(filter.types)}});
+            return Failed;
         }
-
-        bool timeoutOk = false;
-        const double seconds = parser.value(timeoutOpt).toDouble(&timeoutOk);
-        if (!timeoutOk || seconds < 0)
-            return fail(QStringLiteral("--timeout expects seconds"), Usage);
-        const QDeadlineTimer deadline = waiting ? QDeadlineTimer(static_cast<qint64>(seconds * 1000))
-                                                : QDeadlineTimer(QDeadlineTimer::Forever);
-        while (!deadline.hasExpired()) {
-            const int slice = deadline.isForever() ? 1000 : static_cast<int>(qMin<qint64>(deadline.remainingTime(), 1000));
-            const auto ev = c.nextEvent(slice);
+        qint64 lastSeen = std::max<qint64>(since, 0);
+        for (const QJsonValue &v : s.events(lastSeen)) {
+            const QJsonObject ev = v.toObject();
+            lastSeen = std::max(lastSeen, ev.value(QStringLiteral("seq")).toInteger());
+            if (filter.matches(ev))
+                printJson(ev);
+        }
+        if (!parser.isSet(followOpt))
+            return Ok;
+        for (;;) {
+            const auto ev = s.c.nextEvent(1000);
             if (!ev) {
-                if (!c.isOpen())
+                if (!s.c.isOpen())
                     return fail(QStringLiteral("leansipd closed the connection"));
                 continue;
             }
             const qint64 seq = ev->value(QStringLiteral("seq")).toInteger();
             if (seq <= lastSeen)
-                continue; // already printed from the journal
-            lastSeen = seq;
-            if (!matches(*ev))
                 continue;
-            printJson(*ev);
-            if (waiting)
-                return Ok;
+            lastSeen = seq;
+            if (filter.matches(*ev))
+                printJson(*ev);
         }
-        printJson({{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("timeout")},
-                   {QStringLiteral("waitedFor"), QJsonArray::fromStringList(types)}});
-        return Failed;
     }
 
     return fail(QStringLiteral("unknown command '%1'; see `sipctl help`").arg(command), Usage);

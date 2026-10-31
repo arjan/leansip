@@ -11,9 +11,16 @@ namespace leansip {
 // credentials stay in one place.
 namespace config_deriver {
 
+struct Options {
+    // Non-empty: load sndfile.so and record every call, both directions, into this directory.
+    QString recordDir;
+};
+
 // Pure transformation of the config file text. `listen` is e.g. "127.0.0.1:41234",
 // `audioPath` the directory baresip should resolve `play <file>` and ring tones against.
-QString deriveConfigText(const QString &userConfig, const QString &listen, const QString &audioPath);
+// aufile.so is always loaded: leansipd plays clips into calls with `ausrc aufile,<wav>`.
+QString deriveConfigText(const QString &userConfig, const QString &listen, const QString &audioPath,
+                         const Options &options = {});
 
 // The audio_path the user configured, or baresip's default when the line is absent/commented.
 QString userAudioPath(const QString &userConfig);
@@ -30,7 +37,7 @@ struct Result {
 // With `linkAccounts == false` an existing `accounts` file in `targetDir` is left alone (used
 // while a candidate accounts file is being validated).
 Result deriveDirectory(const QString &userDir, const QString &targetDir, const QString &listen,
-                       bool linkAccounts = true);
+                       bool linkAccounts = true, const Options &options = {});
 
 } // namespace config_deriver
 } // namespace leansip

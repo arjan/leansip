@@ -10,7 +10,12 @@ namespace leansip {
 
 namespace {
 const QString kPrefix = QStringLiteral("leansipd_");
+
+QString compact(const QJsonArray &array)
+{
+    return QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact));
 }
+} // namespace
 
 CtrlProxy::CtrlProxy(BaresipClient *upstream, QObject *parent)
     : QObject(parent)
@@ -32,7 +37,7 @@ CtrlProxy::CtrlProxy(BaresipClient *upstream, QObject *parent)
         const qint64 since = params.trimmed().isEmpty() ? 0 : params.trimmed().toLongLong(&ok);
         if (!params.trimmed().isEmpty() && !ok)
             return Result{false, QStringLiteral("expected a sequence number")};
-        return Result{true, QString::fromUtf8(QJsonDocument(eventsSince(since)).toJson(QJsonDocument::Compact))};
+        return Result{true, compact(eventsSince(since))};
     });
 }
 
@@ -71,6 +76,11 @@ void CtrlProxy::addCommand(const QString &name, Handler handler)
     m_commands.insert(name, std::move(handler));
 }
 
+void CtrlProxy::addAsyncCommand(const QString &name, AsyncHandler handler)
+{
+    m_asyncCommands.insert(name, std::move(handler));
+}
+
 void CtrlProxy::setBackendUp(bool up, const QString &reason)
 {
     if (m_backendUp == up)
@@ -97,6 +107,12 @@ QJsonArray CtrlProxy::eventsSince(qint64 since) const
     return out;
 }
 
+bool CtrlProxy::isUi(QLocalSocket *client) const
+{
+    const auto it = m_clients.find(client);
+    return it != m_clients.end() && it->second.ui;
+}
+
 void CtrlProxy::onNewConnection()
 {
     while (QLocalSocket *client = m_server.nextPendingConnection()) {
@@ -106,7 +122,7 @@ void CtrlProxy::onNewConnection()
             client->deleteLater();
             continue;
         }
-        m_clients.emplace(client, netstring::Decoder{});
+        m_clients.emplace(client, ClientState{});
         connect(client, &QLocalSocket::readyRead, this, [this, client] { onClientData(client); });
         connect(client, &QLocalSocket::disconnected, this, [this, client] { onClientGone(client); });
         qCInfo(lcProxy) << "client connected," << clientCount() << "total";
@@ -122,13 +138,13 @@ void CtrlProxy::onClientGone(QLocalSocket *client)
     if (m_clients.erase(client) == 0)
         return;
     client->deleteLater();
+    qCInfo(lcProxy) << "client disconnected," << clientCount() << "left";
+    emit clientCountChanged(clientCount());
     if (client == m_owner) {
         m_owner = nullptr;
         qCInfo(lcProxy) << "owner disconnected";
         emit ownerGone();
     }
-    qCInfo(lcProxy) << "client disconnected," << clientCount() << "left";
-    emit clientCountChanged(clientCount());
 }
 
 void CtrlProxy::onClientData(QLocalSocket *client)
@@ -136,20 +152,87 @@ void CtrlProxy::onClientData(QLocalSocket *client)
     auto it = m_clients.find(client);
     if (it == m_clients.end())
         return;
-    const QList<QByteArray> frames = it->second.feed(client->readAll());
-    const bool failed = it->second.failed();
+    const QList<QByteArray> frames = it->second.decoder.feed(client->readAll());
+    const bool failed = it->second.decoder.failed();
     for (const QByteArray &frame : frames) {
         const QJsonDocument doc = QJsonDocument::fromJson(frame);
         if (!doc.isObject()) {
             reply(client, {}, false, QStringLiteral("bad JSON"), m_seq);
             continue;
         }
-        handleRequest(client, doc.object());
+        Job job;
+        job.client = client;
+        job.request = doc.object();
+        enqueue(std::move(job));
     }
     if (failed) {
         qCWarning(lcProxy) << "client framing error, dropping it";
         client->abort();
     }
+}
+
+void CtrlProxy::enqueue(Job job)
+{
+    m_jobs.push_back(std::move(job));
+    pump();
+}
+
+void CtrlProxy::pump()
+{
+    // Client commands are forwarded without waiting for their reply; only a sequence holds the
+    // queue until its last step has been answered.
+    while (!m_inSequence && !m_jobs.empty()) {
+        Job job = std::move(m_jobs.front());
+        m_jobs.pop_front();
+        if (job.isSequence)
+            startSequence(std::move(job));
+        else if (job.client)
+            handleRequest(job.client, job.request);
+    }
+}
+
+void CtrlProxy::runSequence(QList<Step> steps, SequenceDone done)
+{
+    Job job;
+    job.steps = std::move(steps);
+    job.done = std::move(done);
+    job.isSequence = true;
+    enqueue(std::move(job));
+}
+
+void CtrlProxy::startSequence(Job job)
+{
+    m_inSequence = true;
+    m_sequence = std::move(job);
+    m_sequenceResults.clear();
+    sendNextStep();
+}
+
+void CtrlProxy::sendNextStep()
+{
+    const qsizetype index = m_sequenceResults.size();
+    if (index >= m_sequence.steps.size()) {
+        finishSequence();
+        return;
+    }
+    const Step &step = m_sequence.steps.at(index);
+    m_sequenceToken = m_backendUp ? m_upstream->sendCommand(step.command, step.params) : QString();
+    if (m_sequenceToken.isEmpty()) {
+        m_sequenceResults.append(StepResult{step.command, false, QStringLiteral("baresip is not connected")});
+        finishSequence();
+    }
+}
+
+void CtrlProxy::finishSequence()
+{
+    m_sequenceToken.clear();
+    m_inSequence = false;
+    const SequenceDone done = std::move(m_sequence.done);
+    const QList<StepResult> results = m_sequenceResults;
+    m_sequence = Job{};
+    if (done)
+        done(results);
+    pump();
 }
 
 void CtrlProxy::handleRequest(QLocalSocket *client, const QJsonObject &request)
@@ -160,9 +243,17 @@ void CtrlProxy::handleRequest(QLocalSocket *client, const QJsonObject &request)
     const QString token = tokenValue.isString() ? tokenValue.toString()
                                                 : (tokenValue.isDouble() ? QString::number(tokenValue.toInteger()) : QString());
     const qint64 seq = m_seq;
+    const bool fromUi = isUi(client);
 
     if (command.isEmpty()) {
         reply(client, token, false, QStringLiteral("missing command"), seq);
+        return;
+    }
+    if (command == QLatin1String("leansipd_hello")) {
+        auto it = m_clients.find(client);
+        if (it != m_clients.end() && params.trimmed() == QLatin1String("ui"))
+            it->second.ui = true;
+        reply(client, token, true, QStringLiteral("hello"), seq);
         return;
     }
     if (command == QLatin1String("leansipd_bind")) {
@@ -177,7 +268,64 @@ void CtrlProxy::handleRequest(QLocalSocket *client, const QJsonObject &request)
         }
         return;
     }
+    if (command == QLatin1String("leansipd_seq")) {
+        const QJsonArray array = QJsonDocument::fromJson(params.toUtf8()).array();
+        QList<Step> steps;
+        for (const QJsonValue &v : array) {
+            const QJsonArray pair = v.toArray();
+            if (pair.isEmpty() || !pair.at(0).isString()) {
+                reply(client, token, false, QStringLiteral("expected [[command, params], ...]"), seq);
+                return;
+            }
+            Step step{pair.at(0).toString(), pair.at(1).toString()};
+            if (step.command.startsWith(kPrefix) || step.command == QLatin1String("quit")) {
+                reply(client, token, false, QStringLiteral("%1 cannot be part of a sequence").arg(step.command), seq);
+                return;
+            }
+            if (!fromUi && m_filter) {
+                if (const QString why = m_filter(step.command, step.params); !why.isEmpty()) {
+                    reply(client, token, false, why, seq);
+                    return;
+                }
+            }
+            steps.append(step);
+        }
+        if (steps.isEmpty()) {
+            reply(client, token, false, QStringLiteral("empty sequence"), seq);
+            return;
+        }
+        const QPointer<QLocalSocket> origin(client);
+        Job job;
+        job.isSequence = true;
+        job.steps = steps;
+        job.done = [this, origin, token, seq, fromUi, steps](const QList<StepResult> &results) {
+            QJsonArray out;
+            bool allOk = results.size() == steps.size();
+            for (qsizetype i = 0; i < results.size(); ++i) {
+                const StepResult &r = results.at(i);
+                allOk = allOk && r.ok;
+                out.append(QJsonObject{{QStringLiteral("command"), r.command},
+                                       {QStringLiteral("ok"), r.ok},
+                                       {QStringLiteral("data"), r.data}});
+                if (m_observer)
+                    m_observer(fromUi, r.command, steps.at(i).params, r.ok, r.data);
+            }
+            if (origin)
+                reply(origin, token, allOk, compact(out), seq);
+        };
+        // Ahead of anything queued after this request, so commands keep their arrival order.
+        m_jobs.push_front(std::move(job));
+        return;
+    }
     if (command.startsWith(kPrefix)) {
+        if (const auto async = m_asyncCommands.constFind(command); async != m_asyncCommands.constEnd()) {
+            const QPointer<QLocalSocket> origin(client);
+            (*async)(params, [this, origin, token, seq](bool ok, const QString &data) {
+                if (origin)
+                    reply(origin, token, ok, data, seq);
+            });
+            return;
+        }
         const auto handler = m_commands.constFind(command);
         if (handler == m_commands.constEnd()) {
             reply(client, token, false, QStringLiteral("unknown command %1").arg(command), seq);
@@ -192,6 +340,12 @@ void CtrlProxy::handleRequest(QLocalSocket *client, const QJsonObject &request)
               QStringLiteral("refused: quit would stop baresip for every client; use leansipd_shutdown"), seq);
         return;
     }
+    if (!fromUi && m_filter) {
+        if (const QString why = m_filter(command, params); !why.isEmpty()) {
+            reply(client, token, false, why, seq);
+            return;
+        }
+    }
     if (!m_backendUp) {
         reply(client, token, false, QStringLiteral("baresip is not connected"), seq);
         return;
@@ -201,16 +355,27 @@ void CtrlProxy::handleRequest(QLocalSocket *client, const QJsonObject &request)
         reply(client, token, false, QStringLiteral("baresip is not connected"), seq);
         return;
     }
-    m_pending.insert(upstreamToken, Pending{client, token, seq});
+    m_pending.insert(upstreamToken, Pending{client, token, seq, command, params, fromUi});
 }
 
 void CtrlProxy::onUpstreamResponse(const BaresipResponse &response)
 {
+    if (m_inSequence && response.token == m_sequenceToken) {
+        const Step &step = m_sequence.steps.at(m_sequenceResults.size());
+        m_sequenceResults.append(StepResult{step.command, response.ok, response.data});
+        if (response.ok)
+            sendNextStep();
+        else
+            finishSequence();
+        return;
+    }
     const auto it = m_pending.constFind(response.token);
     if (it == m_pending.constEnd())
         return;
     const Pending pending = *it;
     m_pending.erase(it);
+    if (m_observer)
+        m_observer(pending.fromUi, pending.command, pending.params, response.ok, response.data);
     if (pending.client)
         reply(pending.client, pending.token, response.ok, response.data, pending.seq);
 }
@@ -223,6 +388,18 @@ void CtrlProxy::failPending(const QString &why)
         if (p.client)
             reply(p.client, p.token, false, why, p.seq);
     }
+    if (m_inSequence) {
+        const Step &step = m_sequence.steps.at(m_sequenceResults.size());
+        m_sequenceResults.append(StepResult{step.command, false, why});
+        finishSequence();
+    }
+}
+
+void CtrlProxy::publishEvent(const QJsonObject &event)
+{
+    QJsonObject ev = event;
+    ev[QStringLiteral("event")] = true;
+    publish(ev);
 }
 
 void CtrlProxy::publish(QJsonObject event)

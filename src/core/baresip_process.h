@@ -1,6 +1,7 @@
 #pragma once
 
 #include "baresip_backend.h"
+#include "config_deriver.h"
 
 #include <QObject>
 #include <QProcess>
@@ -37,6 +38,10 @@ public:
     // Extra baresip arguments, e.g. {"-s"} for a SIP trace on stderr; call before start().
     void setExtraArgs(const QStringList &args) { m_extraArgs = args; }
     qint64 pid() const { return m_process.processId(); }
+    // Record every call into `dir` (sndfile.so); empty disables. Call before start()/restart().
+    void setRecordDir(const QString &dir) { m_options.recordDir = dir; }
+    // Deliver baresip's stdout/stderr through outputReceived() instead of forwarding it to ours.
+    void setCaptureOutput(bool capture);
 
     // Picks a free loopback TCP port. Exposed for tests.
     static quint16 pickFreePort();
@@ -51,6 +56,7 @@ public:
 signals:
     void finished(int exitCode, QProcess::ExitStatus status);
     void errorOccurred(const QString &error);
+    void outputReceived(const QByteArray &data);
 
 private:
     QProcess m_process;
@@ -58,6 +64,7 @@ private:
     QString m_binary;
     QString m_derivedDir;
     QStringList m_extraArgs;
+    config_deriver::Options m_options;
     QString m_error;
     quint16 m_port = 0;
     bool m_accountsOverride = false;

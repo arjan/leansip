@@ -224,6 +224,131 @@ private slots:
         QVERIFY(!rig.proxy.hasOwner());
     }
 
+    void sequenceRunsBackToBackAndHoldsOtherClients()
+    {
+        ProxyRig rig;
+        QVERIFY(rig.start());
+        QSignalSpy ra(&rig.a, &BaresipClient::responseReceived);
+        QSignalSpy rb(&rig.b, &BaresipClient::responseReceived);
+        rig.a.sendCommand("leansipd_seq", R"([["callfind","c1"],["hangup",""]])");
+        QTRY_COMPARE(rig.server.received.size(), 1);
+        QCOMPARE(rig.server.lastCommand(), "callfind");
+        QCOMPARE(rig.server.lastParams(), "c1");
+
+        // b's command must wait until a's sequence is done, or it could act on a's call.
+        rig.b.sendCommand("hangup");
+        QTest::qWait(50);
+        QCOMPARE(rig.server.received.size(), 1);
+
+        rig.server.sendResponse(rig.server.lastToken(), true, "setting current call: c1");
+        QTRY_COMPARE(rig.server.received.size(), 2);
+        QCOMPARE(rig.server.lastCommand(), "hangup");
+        rig.server.sendResponse(rig.server.lastToken(), true, "");
+        QTRY_COMPARE(ra.size(), 1);
+        const auto resp = ra.first().first().value<BaresipResponse>();
+        QVERIFY(resp.ok);
+        const QJsonArray steps = QJsonDocument::fromJson(resp.data.toUtf8()).array();
+        QCOMPARE(steps.size(), 2);
+        QCOMPARE(steps.at(0).toObject().value("data").toString(), "setting current call: c1");
+
+        QTRY_COMPARE(rig.server.received.size(), 3); // now b's
+        rig.server.sendResponse(rig.server.lastToken(), true, "b done");
+        QTRY_COMPARE(rb.size(), 1);
+        QCOMPARE(rb.first().first().value<BaresipResponse>().data, "b done");
+    }
+
+    void sequenceStopsAtTheFirstFailure()
+    {
+        ProxyRig rig;
+        QVERIFY(rig.start());
+        QSignalSpy ra(&rig.a, &BaresipClient::responseReceived);
+        rig.a.sendCommand("leansipd_seq", R"([["callfind","gone"],["hangup",""]])");
+        QTRY_COMPARE(rig.server.received.size(), 1);
+        rig.server.sendResponse(rig.server.lastToken(), false, "call not found");
+        QTRY_COMPARE(ra.size(), 1);
+        const auto resp = ra.first().first().value<BaresipResponse>();
+        QVERIFY(!resp.ok);
+        QCOMPARE(QJsonDocument::fromJson(resp.data.toUtf8()).array().size(), 1);
+        QTest::qWait(50);
+        QCOMPARE(rig.server.received.size(), 1); // the hangup never went out
+
+        rig.a.sendCommand("leansipd_seq", R"([["leansipd_shutdown",""]])");
+        rig.a.sendCommand("leansipd_seq", "not json");
+        QTRY_COMPARE(ra.size(), 3);
+        QVERIFY(!ra.at(1).first().value<BaresipResponse>().ok);
+        QVERIFY(!ra.at(2).first().value<BaresipResponse>().ok);
+    }
+
+    void filterAppliesToClientsButNotToTheDialer()
+    {
+        ProxyRig rig;
+        QVERIFY(rig.start());
+        rig.proxy.setCommandFilter([](const QString &command, const QString &params) {
+            return command == "dial" && params == "900" ? QStringLiteral("not allowed") : QString();
+        });
+        QList<QStringList> observed;
+        rig.proxy.setResponseObserver([&](bool fromUi, const QString &command, const QString &params, bool ok, const QString &) {
+            observed.append({fromUi ? "ui" : "client", command, params, ok ? "ok" : "fail"});
+        });
+        QSignalSpy ra(&rig.a, &BaresipClient::responseReceived);
+        QSignalSpy rb(&rig.b, &BaresipClient::responseReceived);
+
+        rig.a.sendCommand("dial", "900");
+        rig.a.sendCommand("leansipd_seq", R"([["uafind","sip:x@y"],["dial","900"]])");
+        QTRY_COMPARE(ra.size(), 2);
+        QCOMPARE(ra.at(0).first().value<BaresipResponse>().data, "not allowed");
+        QCOMPARE(ra.at(1).first().value<BaresipResponse>().data, "not allowed");
+        QVERIFY(rig.server.received.isEmpty());
+
+        rig.b.sendCommand("leansipd_hello", "ui");
+        rig.b.sendCommand("dial", "900");
+        QTRY_COMPARE(rig.server.received.size(), 1);
+        rig.server.sendResponse(rig.server.lastToken(), true, "call id: c9");
+        QTRY_COMPARE(rb.size(), 2);
+        QCOMPARE(observed, (QList<QStringList>{{"ui", "dial", "900", "ok"}}));
+    }
+
+    void asyncCommandsAndDaemonEvents()
+    {
+        ProxyRig rig;
+        QVERIFY(rig.start());
+        CtrlProxy::Reply pending;
+        rig.proxy.addAsyncCommand("leansipd_later", [&](const QString &, CtrlProxy::Reply reply) { pending = reply; });
+        QSignalSpy ra(&rig.a, &BaresipClient::responseReceived);
+        QSignalSpy eb(&rig.b, &BaresipClient::rawEventReceived);
+        rig.a.sendCommand("leansipd_later");
+        QTRY_VERIFY(bool(pending));
+        QTest::qWait(30);
+        QCOMPARE(ra.size(), 0);
+        pending(true, "finally");
+        QTRY_COMPARE(ra.size(), 1);
+        QCOMPARE(ra.first().first().value<BaresipResponse>().data, "finally");
+
+        rig.proxy.publishEvent({{"class", "leansipd"}, {"type", "PLAY_ENDED"}, {"id", "c1"}});
+        QTRY_COMPARE(eb.size(), 1);
+        const QJsonObject ev = eb.first().first().toJsonObject();
+        QVERIFY(ev.value("event").toBool());
+        QCOMPARE(ev.value("seq").toInteger(), rig.proxy.lastSeq());
+    }
+
+    void internalSequenceFailsWhenBaresipGoesAway()
+    {
+        ProxyRig rig;
+        QVERIFY(rig.start());
+        QList<CtrlProxy::StepResult> got;
+        bool done = false;
+        rig.proxy.runSequence({{"callfind", "c1"}, {"audio_debug", ""}}, [&](const QList<CtrlProxy::StepResult> &r) {
+            got = r;
+            done = true;
+        });
+        QTRY_COMPARE(rig.server.received.size(), 1);
+        rig.proxy.setBackendUp(false, "baresip exited (code 1)");
+        QVERIFY(done);
+        QCOMPARE(got.size(), 1);
+        QVERIFY(!got.first().ok);
+        QCOMPARE(got.first().data, "baresip exited (code 1)");
+    }
+
     void garbageFromAClientDropsOnlyThatClient()
     {
         ProxyRig rig;
