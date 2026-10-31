@@ -3,6 +3,8 @@
 #include "core/baresip_client.h"
 #include "core/baresip_process.h"
 #include "core/call_controller.h"
+#include "core/daemon_client.h"
+#include "core/profile.h"
 #include "core/single_instance.h"
 #include "core/unix_signals.h"
 #include "ui/accounts_dialog.h"
@@ -131,9 +133,10 @@ int main(int argc, char *argv[])
     if (signalBridge.install({SIGINT, SIGTERM, SIGHUP}))
         QObject::connect(&signalBridge, &UnixSignalBridge::signalReceived, &app, [] { QApplication::quit(); });
 
-    BaresipProcess process;
-    process.setDerivedDir(BaresipProcess::defaultDerivedDir() + profile);
+    std::unique_ptr<daemon::DaemonBackend> backend;
     std::unique_ptr<AccountValidator> validator;
+    bool quitting = false;
+    int reattachAttempts = 0; // outlives the lambdas below, unlike a block-scoped local
     if (!spawn) {
         const auto endpoint = parseEndpoint(parser.value(connectOpt));
         if (!endpoint) {
@@ -142,17 +145,41 @@ int main(int argc, char *argv[])
         }
         client.connectToHost(endpoint->host, endpoint->port);
     } else {
-        if (!process.start(baresipDir)) {
-            QMessageBox::critical(nullptr, QStringLiteral("leansip"),
-                                  QStringLiteral("Could not start baresip:\n%1").arg(process.lastError()));
+        // baresip belongs to leansipd, shared with sipctl/agents. A daemon we start is ours: we
+        // bind to it, and it stops when this window closes. One that sipctl started is left alone.
+        const QStringList daemonArgs{QStringLiteral("--ui-owned")};
+        QString error;
+        if (!daemon::ensureRunning(baresipDir, daemonArgs, &error)) {
+            QMessageBox::critical(nullptr, QStringLiteral("leansip"), QStringLiteral("Could not start leansipd:\n%1").arg(error));
             return 1;
         }
-        QObject::connect(&process, &BaresipProcess::finished, &app, [&](int code, QProcess::ExitStatus) {
-            if (window.isVisible())
-                window.statusLabel()->setText(QStringLiteral("baresip exited (code %1)").arg(code));
+        const QString socketPath = profile::socketPath(baresipDir);
+        backend = std::make_unique<daemon::DaemonBackend>(baresipDir);
+        validator = std::make_unique<AccountValidator>(backend.get(), &client, accountsPath);
+
+        // If the daemon goes away under us (crash, `sipctl stop`), bring one back.
+        auto reattach = [&, daemonArgs, socketPath] {
+            if (quitting)
+                return;
+            QString err;
+            if (daemon::ensureRunning(baresipDir, daemonArgs, &err))
+                client.connectToServer(socketPath);
+            else
+                window.statusLabel()->setText(err);
+        };
+        QObject::connect(&client, &BaresipClient::disconnected, &app, [&, reattach] {
+            if (quitting || reattachAttempts >= 3)
+                return;
+            ++reattachAttempts;
+            QTimer::singleShot(300 * reattachAttempts, &app, reattach);
         });
-        client.connectToHost(process.host(), process.port());
-        validator = std::make_unique<AccountValidator>(&process, &client, accountsPath);
+        QObject::connect(&client, &BaresipClient::connected, &app, [&] {
+            reattachAttempts = 0;
+            // Refused (harmlessly) by a daemon we did not start; the reply is not tracked.
+            client.sendCommand(QStringLiteral("leansipd_bind"));
+        });
+        // Only now: a Unix socket may connect synchronously, inside this call.
+        client.connectToServer(socketPath);
     }
 
     // F2: the accounts editor. Only one at a time; it needs the spawned baresip to validate.
@@ -203,12 +230,13 @@ int main(int argc, char *argv[])
     });
 
     QObject::connect(&app, &QApplication::aboutToQuit, &app, [&] {
-        controller.hangup();
-        if (client.isConnected()) {
-            client.sendCommand(QStringLiteral("quit"));
-            client.disconnectFromHost();
-        }
-        process.stop();
+        quitting = true;
+        // Closing the dialer ends the user's own call, not one an agent is running.
+        if (controller.ownsCall())
+            controller.hangup();
+        if (!spawn && client.isConnected())
+            client.sendCommand(QStringLiteral("quit")); // --connect: we own nothing else to stop
+        client.disconnectFromHost();
     });
 
     window.raiseWindow(); // show + request focus (uses the launcher's activation token, if any)

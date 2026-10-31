@@ -1,11 +1,13 @@
 #pragma once
 
+#include "baresip_client.h"
+
 #include <QString>
 
 namespace leansip {
 
-// What account validation needs from the thing that runs baresip. BaresipProcess implements it;
-// tests substitute a fake that just points at an in-process fake server.
+// What account validation needs from the thing that runs baresip. BaresipProcess (direct child)
+// and DaemonBackend (leansipd) implement it; tests substitute a fake in-process server.
 class BaresipBackend {
 public:
     virtual ~BaresipBackend() = default;
@@ -20,6 +22,11 @@ public:
     // While true, restart() leaves derivedAccountsPath() alone instead of re-linking the user's file.
     virtual void setAccountsOverride(bool enabled) = 0;
     virtual QString lastError() const = 0;
+
+    // Around restart(): a client talking to baresip directly must drop and re-establish its
+    // connection. Through leansipd the client's connection survives, so those are no-ops there.
+    virtual void detachClient(BaresipClient *client) { client->disconnectFromHost(); }
+    virtual void attachClient(BaresipClient *client) { client->connectToHost(host(), port(), 5000); }
 };
 
 } // namespace leansip

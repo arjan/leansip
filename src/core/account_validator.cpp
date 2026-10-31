@@ -55,7 +55,7 @@ void AccountValidator::validate(const AccountsFile &candidate)
     m_backend->setAccountsOverride(true);
 
     emit progress(QStringLiteral("restarting baresip…"));
-    m_client->disconnectFromHost();
+    m_backend->detachClient(m_client);
     if (!m_backend->restart()) {
         conclude(false, QStringLiteral("could not restart baresip: %1").arg(m_backend->lastError()));
         return;
@@ -68,7 +68,7 @@ void AccountValidator::validate(const AccountsFile &candidate)
 
 bool AccountValidator::reconnect()
 {
-    m_client->connectToHost(m_backend->host(), m_backend->port(), 5000);
+    m_backend->attachClient(m_client);
     return true;
 }
 
@@ -112,7 +112,7 @@ void AccountValidator::conclude(bool ok, const QString &summary)
         // Back to the user's own file: relink and restart so the dialer is usable again.
         emit progress(QStringLiteral("restoring previous accounts…"));
         m_backend->setAccountsOverride(false);
-        m_client->disconnectFromHost();
+        m_backend->detachClient(m_client);
         if (!m_backend->restart())
             qCWarning(lcValidate) << "restore restart failed:" << m_backend->lastError();
         else

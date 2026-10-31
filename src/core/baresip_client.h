@@ -4,13 +4,16 @@
 #include "netstring.h"
 
 #include <QElapsedTimer>
+#include <QJsonObject>
+#include <QLocalSocket>
 #include <QObject>
 #include <QTcpSocket>
 #include <QTimer>
 
 namespace leansip {
 
-// JSON-over-netstring client for baresip's ctrl_tcp module.
+// JSON-over-netstring client for baresip's ctrl_tcp module, or for leansipd, which speaks the
+// same protocol on a Unix socket.
 class BaresipClient : public QObject {
     Q_OBJECT
 public:
@@ -18,6 +21,8 @@ public:
 
     // Keeps retrying until connected or `timeoutMs` elapsed (baresip takes a moment to bind).
     void connectToHost(const QString &host, quint16 port, int timeoutMs = 5000);
+    // Same, over a Unix domain socket (leansipd).
+    void connectToServer(const QString &socketPath, int timeoutMs = 5000);
     void disconnectFromHost();
     bool isConnected() const;
 
@@ -30,15 +35,24 @@ signals:
     void connectionFailed(const QString &error);
     void responseReceived(const leansip::BaresipResponse &response);
     void eventReceived(const leansip::BaresipEvent &event);
+    // The full event object as received, including fields BaresipEvent does not model.
+    void rawEventReceived(const QJsonObject &event);
     void protocolError(const QString &error);
 
 private:
     void attemptConnect();
-    void onSocketError(QAbstractSocket::SocketError error);
+    void handleError(bool peerClosed, const QString &errorString);
+    void onConnected();
+    void onDisconnected();
     void onReadyRead();
     void handleFrame(const QByteArray &payload);
+    QIODevice *device();
 
+    enum class Transport { Tcp, Local };
+    Transport m_transport = Transport::Tcp;
     QTcpSocket m_socket;
+    QLocalSocket m_local;
+    QString m_path;
     netstring::Decoder m_decoder;
     QTimer m_retryTimer;
     QElapsedTimer m_connectClock;

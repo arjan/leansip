@@ -34,6 +34,9 @@ public:
     QString derivedDir() const { return m_derivedDir; }
     // Where to put the derived config instead of defaultDerivedDir(); call before start().
     void setDerivedDir(const QString &dir) { m_derivedDir = dir; }
+    // Extra baresip arguments, e.g. {"-s"} for a SIP trace on stderr; call before start().
+    void setExtraArgs(const QStringList &args) { m_extraArgs = args; }
+    qint64 pid() const { return m_process.processId(); }
 
     // Picks a free loopback TCP port. Exposed for tests.
     static quint16 pickFreePort();
@@ -54,6 +57,7 @@ private:
     QString m_userDir;
     QString m_binary;
     QString m_derivedDir;
+    QStringList m_extraArgs;
     QString m_error;
     quint16 m_port = 0;
     bool m_accountsOverride = false;

@@ -66,8 +66,26 @@ restarts baresip.
 
 ## How it talks to baresip
 
-leansip never edits `~/.baresip`. On start it writes a derived config to
-`$XDG_RUNTIME_DIR/leansip/`:
+The dialer does not run baresip itself. `leansipd`, a small daemon, owns one baresip per
+baresip directory and shares it: the dialer is one client, `sipctl` (below) and anything
+else are others. All clients see the same calls and events, so an agent can watch or drive
+a call you are on, and you can hang up a call an agent placed.
+
+- The dialer starts `leansipd --ui-owned` when none is running, connects, and binds to it.
+  That daemon stops (and with it baresip, unregistering) when the dialer closes or crashes,
+  even if sipctl clients are still connected.
+- A daemon started by `sipctl start` keeps running until `sipctl stop`; a dialer that
+  attaches to it leaves it running when it closes, and hangs up only a call it dialled or
+  answered itself.
+- Clients use `$XDG_RUNTIME_DIR/leansip[-<hash>]/leansipd.sock`, a Unix socket in a 0700
+  directory. They speak baresip's own `ctrl_tcp` protocol (netstring-framed JSON); the
+  daemon routes each response back to the client that asked, broadcasts every event with a
+  running `"seq"` and a `"ts"`, and keeps the last 2000 events for clients that connect later.
+  It refuses `quit` and adds `leansipd_status`, `leansipd_events <since>`,
+  `leansipd_restart [override]`, `leansipd_bind` and `leansipd_shutdown`.
+- The daemon's output, and baresip's, goes to `leansipd.log` in the same directory.
+
+leansip never edits `~/.baresip`. leansipd writes a derived config to that runtime directory:
 
 - your `config` with the console UI modules (`stdio`, `cons`, `gtk`) removed,
 - `ctrl_tcp` enabled on `127.0.0.1:<random port>` (never `0.0.0.0`),
@@ -86,9 +104,29 @@ register the same account.
 
 ### Security note
 
-The `ctrl_tcp` interface has no authentication. Binding it to loopback keeps it
-off the network, but any process running as any user on the same machine can
+Only your user can open the leansipd socket, but any process running as you can then place
+calls on your accounts. baresip's own `ctrl_tcp` interface, which leansipd uses, has no
+authentication; binding it to loopback keeps it off the network, but any local user can
 connect to it. This is the same trust level as the baresip console modules.
+
+## sipctl: scripting and agents
+
+`sipctl` talks to leansipd and prints one JSON object per line. `-d DIR` picks the baresip
+directory (account).
+
+```
+sipctl start                         # also: --sip-trace (SIP messages to leansipd.log)
+seq=$(sipctl dial 940 | jq .seq)     # {"ok":true,"seq":12,"data":"call id: ..."}
+sipctl wait CALL_ESTABLISHED,CALL_CLOSED --since "$seq" --timeout 20
+sipctl dtmf 1#
+sipctl raw callstat                  # any baresip command
+sipctl hangup
+sipctl stop
+```
+
+`sipctl help` lists the commands, `sipctl help <command>` explains one. The full reference,
+including the event types, waiting without races and local test calls between two accounts
+without a SIP server, is [docs/sipctl.md](docs/sipctl.md).
 
 ## Build (Ubuntu)
 
@@ -101,7 +139,7 @@ sudo apt install build-essential cmake ninja-build qt6-base-dev baresip-core
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-./build/src/leansip
+./build/src/leansip            # finds ./build/src/leansipd next to it
 ```
 
 On a machine without `~/.baresip`, leansip lets baresip write its template config on
@@ -115,6 +153,8 @@ sudo cmake --install build
 ## Layout
 
 - `src/core/` — Qt Core/Network only, unit-tested: netstring framing, accounts
-  parser, config derivation, ctrl_tcp client, call state machine, single-instance.
+  parser, config derivation, ctrl_tcp client, call state machine, single-instance,
+  the leansipd proxy (`ctrl_proxy`) and its client/launcher (`daemon_client`).
 - `src/ui/` — the dialer widget.
+- `src/daemon/` — `leansipd`; `src/sipctl/` — `sipctl`.
 - `tests/` — one QtTest executable per unit, run with the offscreen platform.

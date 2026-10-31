@@ -7,7 +7,8 @@
 
 namespace leansip {
 
-// Tracks registration and a single call on top of BaresipClient.
+// Tracks registration and a single call on top of BaresipClient. Through leansipd it also sees
+// calls other clients place or answer, and the daemon's BACKEND_DOWN/BACKEND_UP events.
 // UI-agnostic: emits signals, never touches widgets.
 class CallController : public QObject {
     Q_OBJECT
@@ -35,6 +36,9 @@ public:
     QString peer() const { return m_peer; }
     bool backendAvailable() const { return m_backendAvailable; }
     bool hasPendingDial() const { return !m_pendingDial.isEmpty(); }
+    // True when the current call was dialled or answered through this controller, as opposed
+    // to one another leansipd client (sipctl, an agent) is handling.
+    bool ownsCall() const { return m_ownsCall; }
 
     static bool isValidNumber(const QString &number);
 
@@ -79,6 +83,7 @@ private:
     QString m_seedToken; // in-flight `reginfo` issued on connect; failures are not user-facing
     bool m_backendAvailable = false;
     bool m_localTones = true;
+    bool m_ownsCall = false;
     QHash<QString, QString> m_inflight; // token -> command name
 };
 

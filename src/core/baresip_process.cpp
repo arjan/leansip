@@ -134,7 +134,7 @@ bool BaresipProcess::start(const QString &userDir, const QString &binary)
 
     qCInfo(lcProcess) << "starting" << resolved << "-f" << m_derivedDir << "ctrl on" << listen;
     m_stopping = false;
-    m_process.start(resolved, {QStringLiteral("-f"), m_derivedDir});
+    m_process.start(resolved, QStringList{QStringLiteral("-f"), m_derivedDir} + m_extraArgs);
     if (!m_process.waitForStarted(3000)) {
         m_error = m_process.errorString();
         return false;

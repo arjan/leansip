@@ -441,6 +441,69 @@ private slots:
         QVERIFY(!rig.controller.backendAvailable());
     }
 
+    void daemonBackendDownAndUpReseed()
+    {
+        Rig rig;
+        QVERIFY(rig.connectAndRegister());
+        QSignalSpy lost(&rig.controller, &CallController::backendLost);
+        QSignalSpy ready(&rig.controller, &CallController::backendReady);
+        rig.controller.dial("1");
+        QVERIFY(rig.waitCommands(2));
+
+        rig.server.sendEvent("BACKEND_DOWN", {{"class", "leansipd"}, {"param", "restarting baresip"}});
+        QTRY_COMPARE(lost.size(), 1);
+        QCOMPARE(lost.first().first().toString(), "restarting baresip");
+        QCOMPARE(rig.controller.callState(), CallState::Idle);
+        QCOMPARE(rig.controller.registrationState(), RegState::Unknown);
+        QVERIFY(!rig.controller.backendAvailable());
+
+        // Same connection, fresh baresip: registration is seeded again.
+        rig.server.sendEvent("BACKEND_UP", {{"class", "leansipd"}});
+        QTRY_COMPARE(ready.size(), 1);
+        QVERIFY(rig.controller.backendAvailable());
+        QVERIFY(rig.waitCommands(3));
+        QCOMPARE(rig.server.lastCommand(), "reginfo");
+    }
+
+    void callsOfOtherClientsAreShownButNotOwned()
+    {
+        Rig rig;
+        QVERIFY(rig.connectAndRegister());
+        QSignalSpy peer(&rig.controller, &CallController::peerChanged);
+        // sipctl dialled: we only see the events.
+        rig.server.sendEvent("CALL_RINGING", {{"peeruri", "sip:ivr@example.com"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Outgoing);
+        QCOMPARE(rig.controller.peer(), "sip:ivr@example.com");
+        QVERIFY(!rig.controller.ownsCall());
+        rig.server.sendEvent("CALL_CLOSED", {{"param", "486 Busy Here"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Idle);
+        QTest::qWait(50);
+        QCOMPARE(rig.server.received.size(), 1); // no busy tone for someone else's call
+
+        // An established call nobody here dialled still gets a peer.
+        rig.server.sendEvent("CALL_ESTABLISHED", {{"peeruri", "sip:bob@example.com"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Active);
+        QCOMPARE(rig.controller.peer(), "sip:bob@example.com");
+        QVERIFY(!rig.controller.ownsCall());
+    }
+
+    void ownCallsAreOwnedUntilIdle()
+    {
+        Rig rig;
+        QVERIFY(rig.connectAndRegister());
+        rig.controller.dial("1");
+        QVERIFY(rig.controller.ownsCall());
+        rig.server.sendEvent("CALL_CLOSED", {{"param", "Connection reset by peer"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Idle);
+        QVERIFY(!rig.controller.ownsCall());
+
+        rig.server.sendEvent("CALL_INCOMING", {{"peeruri", "sip:carol@example.com"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Incoming);
+        QVERIFY(!rig.controller.ownsCall());
+        rig.controller.answer();
+        QVERIFY(rig.controller.ownsCall());
+    }
+
     void connectionFailureReportsBackendLost()
     {
         QTcpServer probe;

@@ -23,6 +23,12 @@ qt_add_library(leansip_core STATIC
     core/single_instance.h
     core/unix_signals.cpp
     core/unix_signals.h
+    core/profile.cpp
+    core/profile.h
+    core/ctrl_proxy.cpp
+    core/ctrl_proxy.h
+    core/daemon_client.cpp
+    core/daemon_client.h
 )
 target_include_directories(leansip_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(leansip_core PUBLIC Qt6::Core Qt6::Network PRIVATE leansip_warnings)
@@ -38,4 +44,12 @@ target_link_libraries(leansip_ui PUBLIC leansip_core Qt6::Widgets PRIVATE leansi
 qt_add_executable(leansip main.cpp)
 target_link_libraries(leansip PRIVATE leansip_ui leansip_warnings)
 
-install(TARGETS leansip RUNTIME DESTINATION bin)
+# The daemon that owns baresip, and the command-line client for it. Built next to the dialer,
+# which looks for leansipd in its own directory first.
+qt_add_executable(leansipd daemon/main.cpp)
+target_link_libraries(leansipd PRIVATE leansip_core leansip_warnings)
+
+qt_add_executable(sipctl sipctl/main.cpp)
+target_link_libraries(sipctl PRIVATE leansip_core leansip_warnings)
+
+install(TARGETS leansip leansipd sipctl RUNTIME DESTINATION bin)

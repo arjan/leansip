@@ -119,6 +119,7 @@ void CallController::dial(const QString &number)
     m_pendingDial.clear();
     setPeer(trimmed);
     setCallState(CallState::Outgoing);
+    m_ownsCall = true;
     sendTracked(QStringLiteral("dial"), trimmed);
 }
 
@@ -134,6 +135,7 @@ void CallController::answer()
 {
     if (m_callState != CallState::Incoming)
         return;
+    m_ownsCall = true;
     sendTracked(QStringLiteral("accept"));
 }
 
@@ -175,19 +177,32 @@ void CallController::onEvent(const BaresipEvent &ev)
         setPeer(ev.peerDisplayName.isEmpty() ? ev.peerUri : ev.peerDisplayName);
         setCallState(CallState::Incoming);
     } else if (t == QLatin1String("CALL_RINGING") || t == QLatin1String("CALL_PROGRESS")) {
-        if (m_callState == CallState::Idle)
+        if (m_callState == CallState::Idle) {
+            // Placed by another client (sipctl): show who it is for.
+            setPeer(ev.peerUri);
             setCallState(CallState::Outgoing);
+        }
     } else if (t == QLatin1String("CALL_ESTABLISHED")) {
+        if (m_callState == CallState::Idle)
+            setPeer(ev.peerDisplayName.isEmpty() ? ev.peerUri : ev.peerDisplayName);
         setCallState(CallState::Active);
     } else if (t == QLatin1String("CALL_CLOSED")) {
         if (m_callState != CallState::Idle) {
             // baresip's menu module stays silent on a rejected call, so signal it ourselves.
-            const QString sound = m_callState == CallState::Outgoing ? failureSound(ev.param) : QString();
+            // Only for our own calls: an agent's failed test call should not beep at the user.
+            const QString sound = m_callState == CallState::Outgoing && m_ownsCall ? failureSound(ev.param) : QString();
             setCallState(CallState::Idle);
             emit callEnded(ev.param.trimmed());
             if (!sound.isEmpty() && m_localTones && m_client->isConnected())
                 sendTracked(QStringLiteral("play"), sound);
         }
+    } else if (ev.klass == QLatin1String("leansipd") && t == QLatin1String("BACKEND_DOWN")) {
+        m_backendAvailable = false;
+        setCallState(CallState::Idle);
+        setRegistration(RegistrationState::Unknown, {});
+        emit backendLost(ev.param.isEmpty() ? QStringLiteral("baresip went away") : ev.param);
+    } else if (ev.klass == QLatin1String("leansipd") && t == QLatin1String("BACKEND_UP")) {
+        onConnected(); // a fresh baresip behind the same connection: reseed registration
     } else if (t == QLatin1String("EXIT") || t == QLatin1String("SHUTDOWN")) {
         m_backendAvailable = false;
         setCallState(CallState::Idle);
@@ -256,6 +271,8 @@ void CallController::setCallState(CallState state)
     if (m_callState == state)
         return;
     m_callState = state;
+    if (state == CallState::Idle)
+        m_ownsCall = false;
     emit callStateChanged(state);
 }
 

@@ -1,0 +1,182 @@
+#include "daemon_client.h"
+
+#include "profile.h"
+
+#include <QCoreApplication>
+#include <QDeadlineTimer>
+#include <QDir>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QThread>
+
+#include <unistd.h>
+
+namespace leansip::daemon {
+
+QString executable()
+{
+    const QString sibling = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("leansipd"));
+    if (QFileInfo(sibling).isExecutable())
+        return sibling;
+    return QStandardPaths::findExecutable(QStringLiteral("leansipd"));
+}
+
+bool isRunning(const QString &socketPath, int timeoutMs)
+{
+    QLocalSocket probe;
+    probe.connectToServer(socketPath);
+    const bool ok = probe.waitForConnected(timeoutMs);
+    probe.abort();
+    return ok;
+}
+
+bool ensureRunning(const QString &baresipDir, const QStringList &daemonArgs, QString *error, bool *started,
+                   int timeoutMs)
+{
+    auto fail = [error](const QString &why) {
+        if (error)
+            *error = why;
+        return false;
+    };
+    if (started)
+        *started = false;
+    const QString socket = profile::socketPath(baresipDir);
+    if (isRunning(socket))
+        return true;
+
+    const QString binary = executable();
+    if (binary.isEmpty())
+        return fail(QStringLiteral("leansipd not found next to %1 or in PATH").arg(QCoreApplication::applicationFilePath()));
+
+    const QString runtime = profile::runtimeDir(baresipDir);
+    if (!QDir().mkpath(runtime))
+        return fail(QStringLiteral("cannot create %1").arg(runtime));
+    QFile::setPermissions(runtime, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+
+    QProcess launcher;
+    launcher.setProgram(binary);
+    launcher.setArguments(QStringList{QStringLiteral("--baresip-dir"), baresipDir} + daemonArgs);
+    launcher.setStandardInputFile(QProcess::nullDevice());
+    launcher.setStandardOutputFile(profile::logPath(baresipDir), QIODevice::Append);
+    launcher.setStandardErrorFile(profile::logPath(baresipDir), QIODevice::Append);
+    // Own session: no SIGHUP from the terminal or launcher that started us.
+    launcher.setChildProcessModifier([] { ::setsid(); });
+    if (!launcher.startDetached())
+        return fail(QStringLiteral("cannot start %1: %2").arg(binary, launcher.errorString()));
+    if (started)
+        *started = true;
+
+    const QDeadlineTimer deadline(timeoutMs);
+    while (!deadline.hasExpired()) {
+        if (isRunning(socket, 200))
+            return true;
+        QThread::msleep(50);
+    }
+    return fail(QStringLiteral("leansipd did not come up within %1 s; see %2")
+                    .arg(timeoutMs / 1000)
+                    .arg(profile::logPath(baresipDir)));
+}
+
+bool Connection::open(const QString &socketPath, int timeoutMs, QString *error)
+{
+    m_socket.connectToServer(socketPath);
+    if (m_socket.waitForConnected(timeoutMs))
+        return true;
+    if (error)
+        *error = QStringLiteral("leansipd is not running (%1: %2)").arg(socketPath, m_socket.errorString());
+    return false;
+}
+
+bool Connection::readSome(int timeoutMs)
+{
+    if (m_socket.bytesAvailable() == 0 && !m_socket.waitForReadyRead(timeoutMs))
+        return false;
+    const QList<QByteArray> frames = m_decoder.feed(m_socket.readAll());
+    for (const QByteArray &frame : frames) {
+        const QJsonObject obj = QJsonDocument::fromJson(frame).object();
+        if (obj.value(QStringLiteral("event")).toBool())
+            m_events.append(obj);
+        else if (obj.value(QStringLiteral("response")).toBool())
+            m_responses.append(obj);
+    }
+    return !m_decoder.failed();
+}
+
+std::optional<Reply> Connection::request(const QString &command, const QString &params, int timeoutMs, QString *error)
+{
+    auto fail = [error](const QString &why) -> std::optional<Reply> {
+        if (error)
+            *error = why;
+        return std::nullopt;
+    };
+    if (!isOpen())
+        return fail(QStringLiteral("not connected to leansipd"));
+    const QString token = QStringLiteral("c%1").arg(m_nextToken++);
+    QJsonObject obj;
+    obj[QStringLiteral("command")] = command;
+    obj[QStringLiteral("params")] = params;
+    obj[QStringLiteral("token")] = token;
+    m_socket.write(netstring::encode(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    if (!m_socket.waitForBytesWritten(timeoutMs) && m_socket.bytesToWrite() > 0)
+        return fail(QStringLiteral("cannot write to leansipd: %1").arg(m_socket.errorString()));
+
+    const QDeadlineTimer deadline(timeoutMs);
+    for (;;) {
+        for (qsizetype i = 0; i < m_responses.size(); ++i) {
+            if (m_responses.at(i).value(QStringLiteral("token")).toString() != token)
+                continue;
+            const QJsonObject r = m_responses.takeAt(i);
+            return Reply{r.value(QStringLiteral("ok")).toBool(), r.value(QStringLiteral("data")).toString(),
+                         r.value(QStringLiteral("seq")).toInteger()};
+        }
+        if (deadline.hasExpired())
+            return fail(QStringLiteral("no reply to %1 within %2 ms").arg(command).arg(timeoutMs));
+        if (!readSome(static_cast<int>(deadline.remainingTime()))) {
+            if (m_decoder.failed())
+                return fail(QStringLiteral("bad frame from leansipd: %1").arg(m_decoder.lastError()));
+            if (!isOpen())
+                return fail(QStringLiteral("leansipd closed the connection"));
+        }
+    }
+}
+
+std::optional<QJsonObject> Connection::nextEvent(int timeoutMs)
+{
+    const QDeadlineTimer deadline(timeoutMs);
+    while (m_events.isEmpty()) {
+        if (deadline.hasExpired() || !isOpen())
+            return std::nullopt;
+        if (!readSome(static_cast<int>(deadline.remainingTime())) && (m_decoder.failed() || !isOpen()))
+            return std::nullopt;
+    }
+    return m_events.takeFirst();
+}
+
+DaemonBackend::DaemonBackend(QString baresipDir)
+    : m_baresipDir(std::move(baresipDir))
+{
+}
+
+QString DaemonBackend::derivedAccountsPath() const
+{
+    return QDir(profile::runtimeDir(m_baresipDir)).filePath(QStringLiteral("accounts"));
+}
+
+bool DaemonBackend::restart()
+{
+    Connection connection;
+    if (!connection.open(profile::socketPath(m_baresipDir), 2000, &m_error))
+        return false;
+    // Stopping baresip may take its full SIGTERM grace period before the new one starts.
+    const auto reply = connection.request(QStringLiteral("leansipd_restart"),
+                                          m_override ? QStringLiteral("override") : QString(), 15000, &m_error);
+    if (!reply)
+        return false;
+    if (!reply->ok)
+        m_error = reply->data;
+    return reply->ok;
+}
+
+} // namespace leansip::daemon
