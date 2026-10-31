@@ -93,13 +93,15 @@ int main(int argc, char *argv[])
         return 2;
     }
 
-    SingleInstance instance(SingleInstance::defaultName());
+    // One dialer per baresip directory: a second account runs as its own window.
+    const QString baresipDir = parser.value(dirOpt);
+    const QString profile = SingleInstance::profileSuffix(baresipDir);
+    SingleInstance instance(SingleInstance::defaultName() + profile);
     if (instance.tryForward(number))
         return 0;
     if (!instance.listen())
         std::fputs("leansip: single-instance socket unavailable; continuing without it\n", stderr);
 
-    const QString baresipDir = parser.value(dirOpt);
     const bool spawn = !parser.isSet(connectOpt);
     if (spawn) {
         // First run on a fresh machine: let baresip lay down its template config.
@@ -130,6 +132,7 @@ int main(int argc, char *argv[])
         QObject::connect(&signalBridge, &UnixSignalBridge::signalReceived, &app, [] { QApplication::quit(); });
 
     BaresipProcess process;
+    process.setDerivedDir(BaresipProcess::defaultDerivedDir() + profile);
     std::unique_ptr<AccountValidator> validator;
     if (!spawn) {
         const auto endpoint = parseEndpoint(parser.value(connectOpt));

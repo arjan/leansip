@@ -14,9 +14,12 @@ leansip --connect 127.0.0.1:4444   # attach to a baresip you started yourself
 leansip --baresip-dir ~/other-baresip
 ```
 
-Only one instance runs per user. A second invocation hands its number (or just a
-"raise" request) to the open window and exits, so `leansip %u` works as a `tel:`
-URL handler.
+One instance runs per baresip directory. A second invocation for the same directory
+hands its number (or just a "raise" request) to the open window and exits, so `leansip %u`
+works as a `tel:` URL handler. `leansip --baresip-dir ~/.baresip2` opens a separate dialer
+for a second account next to the default one; each gets its own derived config under
+`$XDG_RUNTIME_DIR` and baresip picks random SIP ports, as long as neither config pins
+`sip_listen`.
 
 On Wayland a window may only take focus with an activation token, which the
 launcher passes to the *new* process as `XDG_ACTIVATION_TOKEN`. leansip forwards

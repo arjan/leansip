@@ -1,5 +1,8 @@
 #include "single_instance.h"
 
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFileInfo>
 #include <QLocalSocket>
 #include <QLoggingCategory>
 
@@ -25,6 +28,20 @@ SingleInstance::SingleInstance(const QString &name, QObject *parent)
 QString SingleInstance::defaultName()
 {
     return QStringLiteral("leansip-%1").arg(::getuid());
+}
+
+QString SingleInstance::profileSuffix(const QString &baresipDir)
+{
+    auto resolve = [](const QString &dir) {
+        const QFileInfo info(dir);
+        const QString canonical = info.canonicalFilePath(); // empty when it does not exist yet
+        return canonical.isEmpty() ? QDir::cleanPath(info.absoluteFilePath()) : canonical;
+    };
+    const QString path = resolve(baresipDir);
+    if (path == resolve(QDir::home().filePath(QStringLiteral(".baresip"))))
+        return {};
+    const QByteArray hash = QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha1).toHex();
+    return u'-' + QString::fromLatin1(hash.left(8));
 }
 
 QByteArray SingleInstance::encodeMessage(const QString &number, const QString &activationToken)

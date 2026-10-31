@@ -20,6 +20,11 @@ public:
 
     static QString defaultName();
 
+    // "" for the default ~/.baresip, otherwise "-<8 hex>" derived from the directory's path.
+    // Appended to defaultName() and the derived config dir so dialers for different baresip
+    // directories run side by side, while a repeat launch for the same one still forwards.
+    static QString profileSuffix(const QString &baresipDir);
+
     // Returns true if another instance accepted the message (caller should exit).
     // Forwards this process's $XDG_ACTIVATION_TOKEN, if any.
     bool tryForward(const QString &number, int timeoutMs = 1000);
