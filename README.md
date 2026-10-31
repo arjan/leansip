@@ -77,7 +77,7 @@ else are others. All clients see the same calls and events, so an agent can watc
 a call you are on, and you can hang up a call an agent placed.
 
 - The dialer starts `leansipd --ui-owned` when none is running, connects, and binds to it.
-  It identifies itself as the dialer, so sipctl's dial rules do not apply to it, and it
+  It identifies itself as the dialer, so its calls have no time limit, and it
   selects its own call and account by id for every command, since baresip's "current call"
   is shared with the other clients.
   That daemon stops (and with it baresip, unregistering) when the dialer closes or crashes,
@@ -138,12 +138,10 @@ sipctl stop
 ```
 
 Speech (`say`, `listen`, `transcribe`) uses ElevenLabs and needs `ELEVENLABS_API_KEY`. sipctl
-only dials loopback destinations and patterns listed in `<baresip dir>/sipctl-allow`, and hangs
-up its own calls after 10 minutes by default; the dialer is exempt from both.
+hangs up its own calls after 10 minutes by default; the dialer's calls have no limit.
 
 `sipctl help` lists the commands, `sipctl help <command>` explains one. The full reference is
-[docs/sipctl.md](docs/sipctl.md). `skills/sipctl/SKILL.md` is a Claude Code skill for SIP
-testing and debugging with it.
+[docs/sipctl.md](docs/sipctl.md).
 
 ## Build (Ubuntu)
 
@@ -172,7 +170,7 @@ sudo cmake --install build
 - `src/core/` — Qt Core/Network only, unit-tested: netstring framing, accounts
   parser, config derivation, ctrl_tcp client, call state machine, single-instance,
   the leansipd proxy (`ctrl_proxy`) and its client/launcher (`daemon_client`), WAV
-  handling and speech detection, dial policy and recordings (`media_control`), call
+  handling and speech detection, stream format and recordings (`media_control`), call
   analysis, the ElevenLabs client.
 - `src/ui/` — the dialer widget.
 - `src/daemon/` — `leansipd`; `src/sipctl/` — `sipctl`.

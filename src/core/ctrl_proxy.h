@@ -32,7 +32,7 @@ namespace leansip {
 //   leansipd_seq <json>       [["callfind","<id>"],["hangup",""]]: run the commands back to back,
 //                             with no other client's command in between, stopping at the first
 //                             failure; replies with a JSON array of {command, ok, data}
-//   leansipd_hello ui         marks the connection as the dialer (exempt from the command filter)
+//   leansipd_hello ui         marks the connection as the dialer (its calls have no time limit)
 //   leansipd_bind             see below
 //
 // baresip has one "current call" and one "current account" for all clients, which is why
@@ -64,8 +64,6 @@ public:
     };
     using SequenceDone = std::function<void(const QList<StepResult> &results)>;
 
-    // Refusal reason for a command from a non-dialer client, or empty to let it through.
-    using CommandFilter = std::function<QString(const QString &command, const QString &params)>;
     // Sees every upstream reply to a client's command (also sequence steps).
     using ResponseObserver = std::function<void(bool fromUi, const QString &command, const QString &params,
                                                 bool ok, const QString &data)>;
@@ -79,7 +77,6 @@ public:
 
     void addCommand(const QString &name, Handler handler);
     void addAsyncCommand(const QString &name, AsyncHandler handler);
-    void setCommandFilter(CommandFilter filter) { m_filter = std::move(filter); }
     void setResponseObserver(ResponseObserver observer) { m_observer = std::move(observer); }
 
     // Runs `steps` upstream back to back; client commands arriving meanwhile wait. `done` gets
@@ -155,7 +152,6 @@ private:
     QHash<QString, Pending> m_pending; // upstream token -> origin
     QHash<QString, Handler> m_commands;
     QHash<QString, AsyncHandler> m_asyncCommands;
-    CommandFilter m_filter;
     ResponseObserver m_observer;
     std::deque<Job> m_jobs;
     bool m_inSequence = false; // the running sequence:

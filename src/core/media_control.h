@@ -20,27 +20,6 @@ struct StreamFormat {
 };
 std::optional<StreamFormat> parseAudioDebug(const QString &text);
 
-// Which destinations a non-dialer client (sipctl, an agent) may call or transfer to.
-// Loopback destinations are always allowed. Other ones must match a pattern from
-// `<baresip dir>/sipctl-allow`: one per line, `#` comments, `*` matches any run of characters,
-// compared against the number/user part and against the whole target without its scheme.
-class CallPolicy {
-public:
-    static CallPolicy load(const QString &allowFile);
-    void setPatterns(const QStringList &patterns);
-    QStringList patterns() const { return m_patterns; }
-
-    // Empty when allowed, otherwise the reason.
-    QString check(const QString &target) const;
-    // Commands that place or redirect a call, and the target taken from their params.
-    static std::optional<QString> dialTarget(const QString &command, const QString &params);
-    static bool isLoopbackTarget(const QString &target);
-
-private:
-    QStringList m_patterns;
-    QString m_file;
-};
-
 // Maps sndfile's per-call dumps ("dump-<time>-enc"/"-dec" in the incoming directory) to call
 // ids and moves them to "<recordings>/<call id>-sent.wav" and "-received.wav". baresip keeps
 // writing through its open file descriptors after the rename.

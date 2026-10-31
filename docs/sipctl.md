@@ -36,27 +36,12 @@ daemon; on a running one the reply carries a `warning`.
 port. If baresip crashes, leansipd restarts it (after 1, 2, 5, 10, then 30 s) and clients see
 `BACKEND_DOWN` and `BACKEND_UP`.
 
-## Safety rules
+## Call time limit
 
-These apply to sipctl and every other client except the dialer:
-
-- **Destinations.** `dial`, `dialdir` and `transfer` only reach loopback destinations
-  (`…@127.0.0.1`, `localhost`, `::1`) and those matching a pattern in
-  `<baresip dir>/sipctl-allow`: one per line, `#` comments, `*` matches anything, compared with
-  the number/user part and with the whole target. `dialcontact` is refused. The file is re-read
-  on every dial.
-
-  ```
-  # ~/.baresip/sipctl-allow
-  940            # local DialoX bot extension
-  phone*         # local Grid phones
-  ```
-
-- **Call length.** Calls that sipctl placed or answered are hung up after
-  `--max-call-seconds` (default 600; `start --max-call-seconds 0` turns it off). The event is
-  `CALL_LIMIT`.
-- Every allowed `dial` on a real account is still a real call that may cost money or reach a
-  person.
+Calls that sipctl (or any client other than the dialer) placed or answered are hung up after
+`--max-call-seconds` (default 600; `start --max-call-seconds 0` turns it off). The event is
+`CALL_LIMIT`. There is no restriction on destinations: every `dial` on a real account is a
+real call that may cost money or reach a person.
 
 ## Output and exit codes
 
@@ -64,7 +49,7 @@ stdout gets one JSON object per line. Command replies:
 
 ```
 {"ok":true,"seq":12,"call":"35fa5b711b6ec554","data":"call id: 35fa5b711b6ec554"}
-{"ok":false,"seq":12,"data":"destination '940' is not allowed for sipctl: add a pattern to …"}
+{"ok":false,"seq":12,"data":"could not find UA for 123"}
 ```
 
 `data` is baresip's reply text with ANSI colours removed, or a JSON value for the daemon's own

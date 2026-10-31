@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End to end with a real baresip: two leansipd daemons (alice, bob) call each other on
 # 127.0.0.1 with accounts that never register, and no sound card (aufile sources and players).
-# Covers dial policy, dial/answer, stream format, say -> listen, DTMF, analyze, hangup by
+# Covers dial/answer, stream format, say -> listen, DTMF, analyze, hangup by
 # call id, and stop/start reusing the same SIP port.
 #
 #   integration_loopback.sh <dir with sipctl and leansipd>
@@ -84,10 +84,6 @@ expect() { # description, jq filter, json
 step start both daemons
 expect "alice start" '.ok and .status.baresipUp and .status.recording' "$(a start --record)"
 expect "bob start" '.ok and .status.baresipUp and .status.recording' "$(b start --record --max-call-seconds 60)"
-
-step dial policy
-out=$(a dial 940 || true)
-expect "940 refused" '(.ok | not) and (.data | test("not allowed"))' "$out"
 
 step call bob
 out=$(a dial "sip:bob@127.0.0.1:$((PORT + 1))")

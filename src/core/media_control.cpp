@@ -4,7 +4,6 @@
 #include <QFileInfo>
 #include <QMap>
 #include <QRegularExpression>
-#include <QTextStream>
 
 namespace leansip {
 
@@ -28,97 +27,6 @@ std::optional<StreamFormat> parseAudioDebug(const QString &text)
     if (f.sampleRate <= 0 || f.channels <= 0)
         return std::nullopt;
     return f;
-}
-
-CallPolicy CallPolicy::load(const QString &allowFile)
-{
-    CallPolicy p;
-    p.m_file = allowFile;
-    QFile f(allowFile);
-    QStringList patterns;
-    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&f);
-        while (!in.atEnd()) {
-            const QString line = in.readLine().section(u'#', 0, 0).trimmed();
-            if (!line.isEmpty())
-                patterns.append(line);
-        }
-    }
-    p.setPatterns(patterns);
-    return p;
-}
-
-void CallPolicy::setPatterns(const QStringList &patterns)
-{
-    m_patterns = patterns;
-}
-
-namespace {
-
-QString stripScheme(QString target)
-{
-    target = target.trimmed();
-    for (const char *scheme : {"sips:", "sip:", "tel:"}) {
-        if (target.startsWith(QLatin1String(scheme), Qt::CaseInsensitive))
-            return target.mid(static_cast<qsizetype>(qstrlen(scheme)));
-    }
-    return target;
-}
-
-QString hostOf(const QString &bare)
-{
-    const qsizetype at = bare.indexOf(u'@');
-    if (at < 0)
-        return {};
-    QString host = bare.mid(at + 1).section(u';', 0, 0).section(u'>', 0, 0);
-    if (host.startsWith(u'[')) // [::1]:5060
-        return host.mid(1).section(u']', 0, 0);
-    if (host.count(u':') == 1)
-        host = host.section(u':', 0, 0);
-    return host;
-}
-
-bool globMatch(const QString &pattern, const QString &text)
-{
-    const QRegularExpression re(QRegularExpression::anchoredPattern(
-        QRegularExpression::escape(pattern).replace(QStringLiteral("\\*"), QStringLiteral(".*"))),
-        QRegularExpression::CaseInsensitiveOption);
-    return re.match(text).hasMatch();
-}
-
-} // namespace
-
-bool CallPolicy::isLoopbackTarget(const QString &target)
-{
-    const QString host = hostOf(stripScheme(target)).toLower();
-    return host == QLatin1String("localhost") || host == QLatin1String("::1") || host.startsWith(QLatin1String("127."));
-}
-
-QString CallPolicy::check(const QString &target) const
-{
-    const QString bare = stripScheme(target);
-    if (bare.isEmpty())
-        return QStringLiteral("no destination");
-    if (isLoopbackTarget(target))
-        return {};
-    const QString user = bare.section(u'@', 0, 0);
-    for (const QString &p : m_patterns) {
-        if (globMatch(p, user) || globMatch(p, bare))
-            return {};
-    }
-    return QStringLiteral("destination '%1' is not allowed for sipctl: add a pattern to %2 "
-                          "(loopback destinations are always allowed)")
-        .arg(bare, m_file.isEmpty() ? QStringLiteral("sipctl-allow") : m_file);
-}
-
-std::optional<QString> CallPolicy::dialTarget(const QString &command, const QString &params)
-{
-    const QString c = command.trimmed().toLower();
-    if (c == QLatin1String("dial") || c == QLatin1String("dialdir") || c == QLatin1String("transfer"))
-        return params.trimmed().section(u' ', 0, 0);
-    if (c == QLatin1String("dialcontact"))
-        return QStringLiteral("(current contact)");
-    return std::nullopt;
 }
 
 RecordingTracker::RecordingTracker(QString incomingDir, QString recordingsDir)

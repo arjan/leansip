@@ -282,12 +282,6 @@ void CtrlProxy::handleRequest(QLocalSocket *client, const QJsonObject &request)
                 reply(client, token, false, QStringLiteral("%1 cannot be part of a sequence").arg(step.command), seq);
                 return;
             }
-            if (!fromUi && m_filter) {
-                if (const QString why = m_filter(step.command, step.params); !why.isEmpty()) {
-                    reply(client, token, false, why, seq);
-                    return;
-                }
-            }
             steps.append(step);
         }
         if (steps.isEmpty()) {
@@ -339,12 +333,6 @@ void CtrlProxy::handleRequest(QLocalSocket *client, const QJsonObject &request)
         reply(client, token, false,
               QStringLiteral("refused: quit would stop baresip for every client; use leansipd_shutdown"), seq);
         return;
-    }
-    if (!fromUi && m_filter) {
-        if (const QString why = m_filter(command, params); !why.isEmpty()) {
-            reply(client, token, false, why, seq);
-            return;
-        }
     }
     if (!m_backendUp) {
         reply(client, token, false, QStringLiteral("baresip is not connected"), seq);

@@ -52,7 +52,6 @@ const CommandHelp kCommands[] = {
   uiOwned, uiAttached                   started by the dialer; dialer still connected
   sipTrace, recording, recordingsDir    options the daemon runs with
   maxCallSeconds                        limit for calls sipctl places or answers
-  allowFile, allowPatterns              which destinations sipctl may dial
   playing                               call a clip is playing into, if any
   seq                                   last event number
 Not running: {"ok":true,"running":false,...} and exit code 3.)"},
@@ -79,10 +78,6 @@ Output: {"ok":true,"started":<bool>,"status":{...}})"},
 
 --from AOR  dial from another account of this baresip directory (e.g. sip:bob@example.com);
             the first account is selected again afterwards.
-
-Destinations must be allowed: loopback ones (…@127.0.0.1) always are, others need a pattern
-in <baresip dir>/sipctl-allow (one per line, * wildcard, e.g. "940" or "*@voiceworks.com").
-The dialer is not subject to this.
 
 Output: {"ok":true,"seq":12,"call":"35fa5b711b6ec554","data":"call id: 35fa5b711b6ec554"}
 Then:   sipctl wait CALL_ESTABLISHED,CALL_CLOSED --call <id> --since 12 --timeout 30

@@ -188,38 +188,6 @@ private slots:
         QCOMPARE(parseAudioDebug(" tx:   encode: G722 16000Hz/1ch ptime=20ms\n")->channels, 1);
     }
 
-    void callPolicy()
-    {
-        QTemporaryDir dir;
-        const QString allow = dir.filePath("sipctl-allow");
-        CallPolicy none = CallPolicy::load(allow); // missing file: loopback only
-        QVERIFY(none.check("sip:bob@127.0.0.1:15061").isEmpty());
-        QVERIFY(none.check("bob@localhost").isEmpty());
-        QVERIFY(none.check("sip:x@[::1]:5060").isEmpty());
-        QVERIFY(none.check("940").contains("not allowed"));
-        QVERIFY(none.check("sip:940@voiceworks.com").contains(allow));
-
-        QFile f(allow);
-        QVERIFY(f.open(QIODevice::WriteOnly));
-        f.write("# local bots\n940\n*@lab.example.com  # whole lab\n+3120*\n");
-        f.close();
-        const CallPolicy p = CallPolicy::load(allow);
-        QCOMPARE(p.patterns(), (QStringList{"940", "*@lab.example.com", "+3120*"}));
-        QVERIFY(p.check("940").isEmpty());
-        QVERIFY(p.check("sip:940@voiceworks.com").isEmpty()); // the user part matches
-        QVERIFY(p.check("tel:+31201234567").isEmpty());
-        QVERIFY(p.check("sip:anyone@lab.example.com").isEmpty());
-        QVERIFY(!p.check("9400").isEmpty());
-        QVERIFY(!p.check("+31612345678").isEmpty());
-        QVERIFY(!p.check("sip:anyone@lab.example.com.evil.org").isEmpty());
-
-        QCOMPARE(*CallPolicy::dialTarget("dial", "940"), "940");
-        QCOMPARE(*CallPolicy::dialTarget("dialdir", "sip:a@b audio=sendonly"), "sip:a@b");
-        QCOMPARE(*CallPolicy::dialTarget("transfer", " 123 "), "123");
-        QVERIFY(CallPolicy::dialTarget("dialcontact", {}));
-        QVERIFY(!CallPolicy::dialTarget("hangup", {}));
-    }
-
     void recordingTrackerClaimsPairsOldestFirst()
     {
         QTemporaryDir dir;

@@ -279,33 +279,25 @@ private slots:
         QVERIFY(!ra.at(2).first().value<BaresipResponse>().ok);
     }
 
-    void filterAppliesToClientsButNotToTheDialer()
+    void observerSeesRepliesAndWhetherTheDialerAsked()
     {
         ProxyRig rig;
         QVERIFY(rig.start());
-        rig.proxy.setCommandFilter([](const QString &command, const QString &params) {
-            return command == "dial" && params == "900" ? QStringLiteral("not allowed") : QString();
-        });
         QList<QStringList> observed;
         rig.proxy.setResponseObserver([&](bool fromUi, const QString &command, const QString &params, bool ok, const QString &) {
             observed.append({fromUi ? "ui" : "client", command, params, ok ? "ok" : "fail"});
         });
-        QSignalSpy ra(&rig.a, &BaresipClient::responseReceived);
         QSignalSpy rb(&rig.b, &BaresipClient::responseReceived);
 
         rig.a.sendCommand("dial", "900");
-        rig.a.sendCommand("leansipd_seq", R"([["uafind","sip:x@y"],["dial","900"]])");
-        QTRY_COMPARE(ra.size(), 2);
-        QCOMPARE(ra.at(0).first().value<BaresipResponse>().data, "not allowed");
-        QCOMPARE(ra.at(1).first().value<BaresipResponse>().data, "not allowed");
-        QVERIFY(rig.server.received.isEmpty());
-
-        rig.b.sendCommand("leansipd_hello", "ui");
-        rig.b.sendCommand("dial", "900");
         QTRY_COMPARE(rig.server.received.size(), 1);
-        rig.server.sendResponse(rig.server.lastToken(), true, "call id: c9");
+        rig.server.sendResponse(rig.server.lastToken(), true, "call id: c1");
+        rig.b.sendCommand("leansipd_hello", "ui");
+        rig.b.sendCommand("dial", "901");
+        QTRY_COMPARE(rig.server.received.size(), 2);
+        rig.server.sendResponse(rig.server.lastToken(), false, "busy");
         QTRY_COMPARE(rb.size(), 2);
-        QCOMPARE(observed, (QList<QStringList>{{"ui", "dial", "900", "ok"}}));
+        QCOMPARE(observed, (QList<QStringList>{{"client", "dial", "900", "ok"}, {"ui", "dial", "901", "fail"}}));
     }
 
     void asyncCommandsAndDaemonEvents()

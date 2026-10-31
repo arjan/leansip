@@ -109,7 +109,6 @@ int main(int argc, char *argv[])
     const QString socketPath = profile::socketPath(baresipDir);
     const QString mediaDir = QDir(runtimeDir).filePath(QStringLiteral("media"));
     const QString recordingsDir = QDir(runtimeDir).filePath(QStringLiteral("recordings"));
-    const QString allowFile = QDir(baresipDir).filePath(QStringLiteral("sipctl-allow"));
     const bool uiOwned = parser.isSet(uiOpt);
     const bool recording = parser.isSet(recordOpt);
     bool maxOk = false;
@@ -198,15 +197,7 @@ int main(int argc, char *argv[])
     });
     QObject::connect(&upstream, &BaresipClient::connected, &app, [&] { stableTimer.start(kStableMs); });
 
-    // --- safety rules for sipctl clients ------------------------------------------------------
-    // Re-read on every dial, so editing sipctl-allow takes effect without a restart.
-    proxy.setCommandFilter([&](const QString &command, const QString &params) -> QString {
-        const auto target = CallPolicy::dialTarget(command, params);
-        if (!target)
-            return {};
-        return CallPolicy::load(allowFile).check(*target);
-    });
-
+    // --- call time limit for sipctl clients ----------------------------------------------------
     // Calls the dialer placed or answered; everything else is an agent's and gets the time limit.
     QSet<QString> uiCalls;
     QSet<QString> ringing;
@@ -421,8 +412,6 @@ int main(int argc, char *argv[])
         s[QStringLiteral("recording")] = recording;
         s[QStringLiteral("recordingsDir")] = recording ? recordingsDir : QString();
         s[QStringLiteral("maxCallSeconds")] = maxCallSeconds;
-        s[QStringLiteral("allowFile")] = allowFile;
-        s[QStringLiteral("allowPatterns")] = QJsonArray::fromStringList(CallPolicy::load(allowFile).patterns());
         s[QStringLiteral("playing")] = playing ? playing->callId : QString();
         s[QStringLiteral("seq")] = proxy.lastSeq();
         return CtrlProxy::Result{true, compact(s)};

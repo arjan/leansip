@@ -181,7 +181,7 @@ int main(int argc, char *argv[])
         });
         QObject::connect(&client, &BaresipClient::connected, &app, [&] {
             reattachAttempts = 0;
-            // We are the dialer: exempt from sipctl's dial rules. Binding is refused (harmlessly)
+            // We are the dialer: our calls have no time limit. Binding is refused (harmlessly)
             // by a daemon we did not start. Neither reply is tracked.
             client.sendCommand(QStringLiteral("leansipd_hello"), QStringLiteral("ui"));
             client.sendCommand(QStringLiteral("leansipd_bind"));
