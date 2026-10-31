@@ -172,6 +172,8 @@ void MainWindow::buildUi(const AccountInfo &account)
     m_number->setAlignment(Qt::AlignCenter);
     m_number->setFrame(false);
     m_number->setFont(monoFont(kNumberMaxPt, true));
+    // Sized for the largest font, so shrinking or growing the text never changes the window height.
+    m_number->setFixedHeight(m_number->sizeHint().height());
     QPalette numberPalette = m_number->palette();
     numberPalette.setColor(QPalette::Text, QColor(QLatin1String(kLcdInk)));
     numberPalette.setColor(QPalette::PlaceholderText, QColor(QLatin1String(kLcdDim)));

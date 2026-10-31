@@ -49,6 +49,8 @@ private slots:
         QCOMPARE(m_window->statusLabel()->alignment(), Qt::AlignCenter);
         QCOMPARE(m_window->numberEdit()->placeholderText(), "enter number");
         const int big = m_window->numberEdit()->font().pointSize();
+        const int height = m_window->numberEdit()->height();
+        const int windowHeight = m_window->height();
         QVERIFY(big >= 22); // 12 monospace digits still fit large
 
         m_window->numberEdit()->setText("+31201234567");
@@ -66,6 +68,11 @@ private slots:
 
         m_window->numberEdit()->clear();
         QCOMPARE(m_window->numberEdit()->font().pointSize(), big); // grows back
+
+        m_window->numberEdit()->setText("1");
+        QTest::qWait(100); // let the layout pass run
+        QCOMPARE(m_window->numberEdit()->height(), height); // font size never moves the layout
+        QCOMPARE(m_window->height(), windowHeight);
     }
 
     void windowHeightFollowsCurrentPage()
