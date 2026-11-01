@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(leansip VERSION 0.1.0 LANGUAGES CXX)
+project(leansip VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,7 +20,30 @@ target_compile_options(leansip_warnings INTERFACE
     -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion
     $<$<BOOL:${LEANSIP_WERROR}>:-Werror>)
 
+include(GNUInstallDirs)
 add_subdirectory(src)
+
+install(FILES packaging/leansip.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES packaging/leansip.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+install(FILES README.md LICENSE docs/leansipctl.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
+
+# `cpack` in the build directory: a .deb for Debian/Ubuntu and a .tar.gz of the same files.
+# Both use the system's Qt 6 (6.4 or newer) and need baresip installed.
+set(CPACK_GENERATOR "DEB;TGZ")
+set(CPACK_PACKAGE_NAME leansip)
+set(CPACK_PACKAGE_VENDOR "Arjan Scherpenisse")
+set(CPACK_PACKAGE_CONTACT "Arjan Scherpenisse <arjan@miraclethings.nl>")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Keyboard-driven SIP dialer and agent CLI on top of baresip")
+set(CPACK_PACKAGE_DESCRIPTION "leansip is a small Qt dialer that drives baresip. leansipd shares one baresip per profile between the dialer and leansipctl, a JSON command-line client for scripts and coding agents (calls, DTMF, recording, speech via ElevenLabs, call analysis).")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/arjan/leansip")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_STRIP_FILES ON)
+set(CPACK_PACKAGE_FILE_NAME "leansip-${PROJECT_VERSION}-linux-${CMAKE_SYSTEM_PROCESSOR}")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_SECTION net)
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "baresip-core")
+include(CPack)
 
 if(LEANSIP_BUILD_TESTS)
     enable_testing()

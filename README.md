@@ -165,6 +165,23 @@ hangs up its own calls after 10 minutes by default; the dialer's calls have no l
 `leansipctl help` lists the commands, `leansipctl help <command>` explains one. The full reference is
 [docs/leansipctl.md](docs/leansipctl.md).
 
+## Install
+
+Releases on GitHub carry a `.deb` and a `.tar.gz` for x86-64 Linux, built on Ubuntu 24.04. Both
+use the system's Qt 6 (6.4 or newer) and need baresip:
+
+```
+sudo apt install ./leansip_<version>_amd64.deb     # pulls in baresip-core and Qt
+```
+
+The tarball holds `bin/` and `share/` to unpack anywhere; install `baresip-core` and Qt 6 yourself.
+`SHA256SUMS` lists the checksums, and `gh attestation verify <file> --repo arjan/leansip` checks
+that a file was built by this repository's release workflow.
+
+Releasing: set `project(leansip VERSION x.y.z)` in `CMakeLists.txt`, commit, and push a tag
+`vx.y.z`. `.github/workflows/release.yml` builds, runs all tests, packages with CPack and
+publishes the release. `cpack` in a build directory makes the same packages locally.
+
 ## Build (Ubuntu)
 
 Tested on Ubuntu 26.04 (Qt 6.10, baresip 1.1.0). Needs Qt 6.4+ and CMake 3.22+;

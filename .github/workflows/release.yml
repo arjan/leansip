@@ -1,0 +1,93 @@
+# Builds, tests and packages leansip for Linux when a v* tag is pushed, and publishes a GitHub
+# release with the .deb, the .tar.gz, SHA256SUMS and build provenance attestations.
+# The tag must match project(... VERSION) in CMakeLists.txt.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  linux:
+    # The oldest Ubuntu we support: its Qt (6.4) and glibc set what the packages need.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that the tag matches the project version
+        run: |
+          version=$(sed -n 's/^project(leansip VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match project version $version" >&2
+            exit 1
+          fi
+
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build dpkg-dev file \
+            qt6-base-dev libtomlplusplus-dev baresip-core jq python3
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build
+
+      # Includes the loopback call test against a real baresip, with a fake speech service.
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package
+        run: cd build && cpack
+
+      - name: Install the .deb and run it
+        run: |
+          sudo apt-get install -y ./build/leansip_*.deb
+          leansipctl --version
+          leansipd --version
+          QT_QPA_PLATFORM=offscreen leansip --version
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages
+          path: |
+            build/leansip_*.deb
+            build/leansip-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: linux
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write     # create the release
+      id-token: write     # sign the attestations
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages
+          path: dist
+
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.deb
+            dist/*.tar.gz
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "leansip $GITHUB_REF_NAME" \
+            --generate-notes --verify-tag

@@ -52,7 +52,8 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("leansip"));
-    QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QApplication::setApplicationVersion(QStringLiteral(LEANSIP_VERSION));
+    QApplication::setDesktopFileName(QStringLiteral("leansip")); // Wayland app id: icon and .desktop match
     QApplication::setQuitOnLastWindowClosed(true);
 
     QCommandLineParser parser;

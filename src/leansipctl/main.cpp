@@ -440,7 +440,7 @@ int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("leansipctl"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.0"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(LEANSIP_VERSION));
 
     QCommandLineParser parser;
     parser.addVersionOption();

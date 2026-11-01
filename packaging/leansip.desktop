@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=leansip
+GenericName=SIP Dialer
+Comment=Keyboard-driven SIP dialer on top of baresip
+Exec=leansip %u
+Icon=leansip
+Terminal=false
+Categories=Network;Telephony;
+MimeType=x-scheme-handler/tel;x-scheme-handler/sip;x-scheme-handler/sips;
+Keywords=phone;call;voip;sip;dialer;
+StartupNotify=true
+StartupWMClass=leansip

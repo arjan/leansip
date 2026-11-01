@@ -103,7 +103,7 @@ int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("leansipd"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.0"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(LEANSIP_VERSION));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("Shares one baresip between the leansip dialer and leansipctl"));

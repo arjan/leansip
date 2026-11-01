@@ -44,6 +44,7 @@ qt_add_library(leansip_core STATIC
 target_include_directories(leansip_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(leansip_core PUBLIC Qt6::Core Qt6::Network PRIVATE leansip_warnings)
 target_include_directories(leansip_core SYSTEM PRIVATE ${TOMLPLUSPLUS_INCLUDE_DIR})
+target_compile_definitions(leansip_core PUBLIC LEANSIP_VERSION="${PROJECT_VERSION}")
 
 qt_add_library(leansip_ui STATIC
     ui/main_window.cpp
@@ -62,4 +63,4 @@ target_link_libraries(leansipd PRIVATE leansip_core leansip_warnings)
 qt_add_executable(leansipctl leansipctl/main.cpp)
 target_link_libraries(leansipctl PRIVATE leansip_core leansip_warnings)
 
-install(TARGETS leansip leansipd leansipctl RUNTIME DESTINATION bin)
+install(TARGETS leansip leansipd leansipctl RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
