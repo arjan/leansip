@@ -4,6 +4,8 @@ A minimal Linux SIP dialer. It does no SIP or audio work itself: it runs
 [baresip](https://github.com/baresip/baresip) with a config generated from one
 `leansip.toml` profile and drives it over its `ctrl_tcp` JSON interface.
 
+<img src="docs/screenshot.png" width="272" alt="The leansip dialer during a call: the number on a green LCD, with MUTE and +1 CALL(S) indicators">
+
 ## Usage
 
 ```
