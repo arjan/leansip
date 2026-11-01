@@ -131,7 +131,7 @@ QString AccountRecord::toLine() const
 {
     QString line;
     if (!displayName.isEmpty())
-        line += u'"' + displayName + u"\" ";
+        line += u'"' + displayName + QStringLiteral("\" ");
     line += u'<' + aor();
     if (!transport.isEmpty())
         line += QStringLiteral(";transport=%1").arg(transport);

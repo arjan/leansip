@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QStringList>
 
@@ -28,6 +29,13 @@ const QRegularExpression &ctrlTcpListenLine()
 const QRegularExpression &sndPathLine()
 {
     static const QRegularExpression re(QStringLiteral(R"(^\s*snd_path\b)"));
+    return re;
+}
+
+// baresip will not start when sip_cafile names a file that does not exist (no ca-certificates).
+const QRegularExpression &caFileLine()
+{
+    static const QRegularExpression re(QStringLiteral(R"(^\s*sip_cafile\s+(\S+))"));
     return re;
 }
 
@@ -81,6 +89,8 @@ QString deriveConfigText(const QString &userConfig, const QString &listen, const
         if (audioPathLine().match(line).hasMatch())
             continue;
         if (!options.recordDir.isEmpty() && sndPathLine().match(line).hasMatch())
+            continue;
+        if (const auto ca = caFileLine().match(line); ca.hasMatch() && !QFileInfo::exists(ca.captured(1)))
             continue;
         out.append(line);
     }

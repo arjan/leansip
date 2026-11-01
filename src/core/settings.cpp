@@ -377,7 +377,7 @@ std::optional<File> load(const QString &path, QString *error)
     };
     struct stat st {};
     if (::stat(QFile::encodeName(path).constData(), &st) != 0)
-        return fail(QStringLiteral("no config file at %1; see \"Configuration\" in the leansip README").arg(path));
+        return fail(QStringLiteral("no config file at %1; see docs/configuration.md in the leansip source or /usr/share/doc/leansip").arg(path));
     if (st.st_uid != ::getuid())
         return fail(QStringLiteral("%1 belongs to another user").arg(path));
     if ((st.st_mode & 077) != 0)

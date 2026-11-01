@@ -44,6 +44,20 @@ private slots:
         QCOMPARE(out.count("debug_cmd.so"), 1);
     }
 
+    void dropsAMissingCaFile()
+    {
+        const QString out = config_deriver::deriveConfigText(
+            QStringLiteral("sip_cafile\t\t/nonexistent/ca.crt\nsip_tos\t\t160\n"), QStringLiteral("127.0.0.1:1"),
+            QStringLiteral("/s"));
+        QVERIFY(!out.contains("sip_cafile"));
+        QVERIFY(out.contains("sip_tos"));
+        QTemporaryFile ca;
+        QVERIFY(ca.open());
+        const QString kept = config_deriver::deriveConfigText(QStringLiteral("sip_cafile\t\t%1\n").arg(ca.fileName()),
+                                                              QStringLiteral("127.0.0.1:1"), QStringLiteral("/s"));
+        QVERIFY(kept.contains("sip_cafile\t\t" + ca.fileName()));
+    }
+
     void addsRequiredAppModulesWhenMissing()
     {
         const QString out = config_deriver::deriveConfigText(QStringLiteral("#module_app\t\tmenu.so\n"),

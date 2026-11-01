@@ -65,7 +65,7 @@ EOF
     echo 'default_profile = "alice"'
     # baresip never needs alice's password here; this exercises the password_cmd path.
     profile alice "$PORT" 'password_cmd = "echo pw-alice"'
-    profile bob $((PORT + 1)) 'confirm_dial = true'
+    profile bob $((PORT + 2)) 'confirm_dial = true' # baresip 1.0 also binds the next port up
 } >"$LEANSIP_CONFIG"
 chmod 600 "$LEANSIP_CONFIG"
 
@@ -116,7 +116,7 @@ out=$(b raw dial "sip:alice@127.0.0.1:$PORT") && fail "raw dial without --yes: $
 expect "no call was placed" '.data | test("ESTABLISHED|OUTGOING|RINGING") | not' "$(b calls)"
 
 step call bob
-out=$(a dial "sip:bob@127.0.0.1:$((PORT + 1))")
+out=$(a dial "sip:bob@127.0.0.1:$((PORT + 2))")
 expect "dial" '.ok and (.call | length > 0)' "$out"
 CALL=$(echo "$out" | jq -r .call)
 SEQ=$(echo "$out" | jq -r .seq)

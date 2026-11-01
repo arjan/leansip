@@ -10,8 +10,8 @@ one in detail. This page covers the same ground plus what needs more room.
 
 ## Profiles and daemons
 
-A profile is one SIP account in `~/.config/leansip/leansip.toml` (format: "Configuration" in the
-README). `-p` picks one; without it leansipctl uses `$LEANSIP_PROFILE`, then the file's
+A profile is one SIP account in `~/.config/leansip/leansip.toml` (format:
+[configuration.md](configuration.md)). `-p` picks one; without it leansipctl uses `$LEANSIP_PROFILE`, then the file's
 `default_profile`, then the only profile. `--config` or `$LEANSIP_CONFIG` points at another file.
 
 ```
@@ -242,7 +242,7 @@ aor = "sip:alice@127.0.0.1"
 account_params = { regint = 0 }
 
 [profiles.alice.baresip]
-sip_listen = "127.0.0.1:15060"            # 15061 for bob
+sip_listen = "127.0.0.1:15060"            # 15062 for bob: baresip may take the next port too
 module = ["g711.so", "aufile.so"]
 audio_source = "aufile,/path/to/silence.wav"
 audio_player = "aufile,/path/to/heard.wav"

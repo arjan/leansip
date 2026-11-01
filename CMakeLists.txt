@@ -25,10 +25,11 @@ add_subdirectory(src)
 
 install(FILES packaging/leansip.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES packaging/leansip.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
-install(FILES README.md LICENSE docs/leansipctl.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
+install(FILES README.md LICENSE docs/leansipctl.md docs/configuration.md docs/architecture.md
+        DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 # `cpack` in the build directory: a .deb for Debian/Ubuntu and a .tar.gz of the same files.
-# Both use the system's Qt 6 (6.4 or newer) and need baresip installed.
+# Both use the system's Qt 6 and need baresip 1.1.0 or newer installed.
 set(CPACK_GENERATOR "DEB;TGZ")
 set(CPACK_PACKAGE_NAME leansip)
 set(CPACK_PACKAGE_VENDOR "Arjan Scherpenisse")
@@ -42,7 +43,7 @@ set(CPACK_PACKAGE_FILE_NAME "leansip-${PROJECT_VERSION}-linux-${CMAKE_SYSTEM_PRO
 set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_DEBIAN_PACKAGE_SECTION net)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "baresip-core")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "baresip-core (>= 1.1.0)") # 1.0 has no call ids
 include(CPack)
 
 if(LEANSIP_BUILD_TESTS)
