@@ -1,4 +1,5 @@
 #include "core/config_deriver.h"
+#include "core/settings.h"
 
 #include <QtTest>
 
@@ -56,6 +57,60 @@ private slots:
         const QString kept = config_deriver::deriveConfigText(QStringLiteral("sip_cafile\t\t%1\n").arg(ca.fileName()),
                                                               QStringLiteral("127.0.0.1:1"), QStringLiteral("/s"));
         QVERIFY(kept.contains("sip_cafile\t\t" + ca.fileName()));
+    }
+
+    // Without a CA file baresip accepts any TLS server certificate, so a TLS account must have one.
+    void tlsAccountNeedsCaCertificates_data()
+    {
+        QTest::addColumn<QString>("profile");
+        QTest::addColumn<bool>("tls");
+        QTest::newRow("udp") << QStringLiteral(R"(aor = "sip:a@b.example")") << false;
+        QTest::newRow("tcp") << QStringLiteral("aor = \"sip:a@b.example\"\ntransport = \"tcp\"") << false;
+        QTest::newRow("transport tls") << QStringLiteral("aor = \"sip:a@b.example\"\ntransport = \"tls\"") << true;
+        QTest::newRow("TLS uppercase") << QStringLiteral("aor = \"sip:a@b.example\"\ntransport = \"TLS\"") << true;
+        QTest::newRow("sips") << QStringLiteral(R"(aor = "sips:a@b.example")") << true;
+        QTest::newRow("tls outbound")
+            << QStringLiteral("aor = \"sip:a@b.example\"\noutbound = \"sips:proxy.example\"") << true;
+    }
+
+    void tlsAccountNeedsCaCertificates()
+    {
+        QFETCH(QString, profile);
+        QFETCH(bool, tls);
+        QString error;
+        const auto f = settings::parse("[profiles.p]\n" + profile + "\n", &error);
+        QVERIFY2(f, qPrintable(error));
+        // A password that happens to read like TLS does not count.
+        const auto line = settings::accountLine(f->profiles.value("p"), "sips:transport=tls", &error);
+        QVERIFY2(line, qPrintable(error));
+
+        QTemporaryDir dir;
+        QTemporaryFile caFile;
+        QVERIFY(dir.isValid() && caFile.open());
+        const QString missing = dir.filePath("missing.crt");
+        const QStringList noCa = {QString(), "sip_cafile\t\t" + missing, "#sip_cafile\t\t" + caFile.fileName(),
+                                  "sip_capath\t\t" + dir.filePath("nodir"), "sip_capath\t\t" + caFile.fileName()};
+        for (const QString &config : noCa) {
+            const config_deriver::Setup setup{config + '\n', *line, {}};
+            const QString problem = config_deriver::tlsProblem(setup);
+            QCOMPARE(problem.isEmpty(), !tls);
+            QVERIFY(!problem.contains("sips:transport=tls"));
+            const auto r = config_deriver::writeDirectory(setup, dir.filePath("derived"), QStringLiteral("127.0.0.1:9"));
+            QCOMPARE(r.ok, !tls);
+            if (tls) {
+                QVERIFY(r.error.contains("CA certificates"));
+                QVERIFY(!QFileInfo::exists(dir.filePath("derived/accounts"))); // nothing written
+            }
+            QDir(dir.filePath("derived")).removeRecursively();
+        }
+        if (tls) {
+            QVERIFY(config_deriver::tlsProblem({"sip_cafile\t\t" + missing + "\n", *line, {}}).contains(missing));
+        }
+
+        const QStringList withCa = {"sip_cafile\t\t" + caFile.fileName(), "sip_capath\t\t" + dir.path(),
+                                    "sip_cafile\t\t" + missing + "\nsip_capath\t\t" + dir.path()};
+        for (const QString &config : withCa)
+            QVERIFY(config_deriver::tlsProblem({config + '\n', *line, {}}).isEmpty());
     }
 
     void addsRequiredAppModulesWhenMissing()

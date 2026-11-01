@@ -32,10 +32,17 @@ const QRegularExpression &sndPathLine()
     return re;
 }
 
-// baresip will not start when sip_cafile names a file that does not exist (no ca-certificates).
+// baresip will not start when sip_cafile names a file that does not exist (no ca-certificates),
+// so such a line is left out; tlsProblem() then refuses accounts that would need it.
 const QRegularExpression &caFileLine()
 {
     static const QRegularExpression re(QStringLiteral(R"(^\s*sip_cafile\s+(\S+))"));
+    return re;
+}
+
+const QRegularExpression &caPathLine()
+{
+    static const QRegularExpression re(QStringLiteral(R"(^\s*sip_capath\s+(\S+))"));
     return re;
 }
 
@@ -122,9 +129,39 @@ QString deriveConfigText(const QString &userConfig, const QString &listen, const
     return out.join(u'\n');
 }
 
+QString tlsProblem(const Setup &setup)
+{
+    QString account = setup.accountLine;
+    account.remove(QRegularExpression(QStringLiteral("auth_pass=[^;>]*")));
+    static const QRegularExpression tls(QStringLiteral(R"(\bsips:|transport=tls\b)"),
+                                        QRegularExpression::CaseInsensitiveOption);
+    if (!tls.match(account).hasMatch())
+        return QString();
+    QStringList configured;
+    const QStringList lines = setup.config.split(u'\n');
+    for (const QString &line : lines) {
+        if (const auto ca = caFileLine().match(line); ca.hasMatch()) {
+            if (QFileInfo(ca.captured(1)).isFile())
+                return QString();
+            configured.append(ca.captured(1));
+        }
+        if (const auto ca = caPathLine().match(line); ca.hasMatch()) {
+            if (QFileInfo(ca.captured(1)).isDir())
+                return QString();
+            configured.append(ca.captured(1));
+        }
+    }
+    return QStringLiteral("the account uses TLS but there are no CA certificates to check the server with "
+                          "(%1); install ca-certificates or set sip_cafile/sip_capath under [baresip]")
+        .arg(configured.isEmpty() ? QStringLiteral("no sip_cafile or sip_capath set")
+                                  : configured.join(QStringLiteral(", ")) + QStringLiteral(" not found"));
+}
+
 Result writeDirectory(const Setup &setup, const QString &targetDir, const QString &listen, const Options &options)
 {
     auto fail = [](const QString &why) { return Result{false, {}, {}, why}; };
+    if (const QString tls = tlsProblem(setup); !tls.isEmpty())
+        return fail(tls);
     const QDir target(targetDir);
     const QString soundsDir = target.filePath(QStringLiteral("sounds"));
     if (!QDir().mkpath(soundsDir))

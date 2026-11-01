@@ -39,7 +39,12 @@ struct Setup {
     QString uuid;
 };
 
-// Writes config, accounts (0600) and uuid into `targetDir` (created 0700 if missing) and links
+// Empty when `setup` is safe to run; otherwise why not. An account that uses TLS (sips: or
+// transport=tls, also on its outbound proxy) needs an existing sip_cafile or sip_capath:
+// without one baresip accepts any server certificate.
+QString tlsProblem(const Setup &setup);
+
+// Fails with tlsProblem() when there is one. Writes config, accounts (0600) and uuid into `targetDir` (created 0700 if missing) and links
 // baresip's stock sounds into its sounds directory.
 Result writeDirectory(const Setup &setup, const QString &targetDir, const QString &listen, const Options &options = {});
 

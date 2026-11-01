@@ -66,7 +66,11 @@ G.711, STUN/TURN/ICE. `[baresip]` and `[profiles.<name>.baresip]` change it:
 
 leansip always adds what it needs itself (its control connection, call and account modules,
 `aufile` for playing audio into calls, `sndfile` when recording) and removes console UI modules.
-A `sip_cafile` that does not exist is left out, since baresip would not start with it.
+A `sip_cafile` that does not exist is left out, since baresip would not start with it. Without
+CA certificates baresip accepts any TLS server certificate, so a profile that uses TLS (`sips:`,
+`transport = "tls"` or a `sips:` outbound proxy) refuses to start unless `sip_cafile` names an
+existing file or `sip_capath` an existing directory. The default is
+`/etc/ssl/certs/ca-certificates.crt`, from the `ca-certificates` package.
 
 The settings themselves are baresip's: see the comments in the `config` file baresip writes on
 its first run, or [baresip's documentation](https://github.com/baresip/baresip/wiki).

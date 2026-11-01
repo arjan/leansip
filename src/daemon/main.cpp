@@ -92,9 +92,14 @@ std::optional<config_deriver::Setup> loadSetup(const QString &configPath, const 
     const auto line = settings::accountLine(*profile, *password, error);
     if (!line)
         return std::nullopt;
+    config_deriver::Setup setup{settings::baresipConfig(profile->baresip), *line, profile->uuid};
+    if (const QString tls = config_deriver::tlsProblem(setup); !tls.isEmpty()) {
+        *error = tls;
+        return std::nullopt;
+    }
     if (profileOut)
         *profileOut = *profile;
-    return config_deriver::Setup{settings::baresipConfig(profile->baresip), *line, profile->uuid};
+    return setup;
 }
 
 } // namespace
