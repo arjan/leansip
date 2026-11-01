@@ -14,6 +14,7 @@
 #include <QTimer>
 
 #include <csignal>
+#include <memory>
 #include <cstdio>
 
 using namespace leansip;
@@ -93,27 +94,29 @@ int main(int argc, char *argv[])
     const QString configPath = QDir(parser.value(configOpt)).absolutePath();
     QString loadError;
     const auto config = settings::load(configPath, &loadError);
-    const auto prof = config ? settings::select(*config, parser.value(profileOpt), &loadError) : std::nullopt;
-    if (!prof) {
+    const auto selected = config ? settings::select(*config, parser.value(profileOpt), &loadError) : std::nullopt;
+    if (!selected) {
         std::fprintf(stderr, "leansip: %s\n", qPrintable(loadError));
         QMessageBox::critical(nullptr, QStringLiteral("leansip"), loadError);
         return 1;
     }
+    // The profile this window serves; Ctrl+<digit> can switch it.
+    settings::Profile current = *selected;
 
     // One dialer per profile: another profile runs as its own window.
-    SingleInstance instance(SingleInstance::defaultName() + u'-' + prof->name);
-    if (instance.tryForward(number))
+    auto instanceName = [](const QString &profileName) { return SingleInstance::defaultName() + u'-' + profileName; };
+    auto instance = std::make_unique<SingleInstance>(instanceName(current.name));
+    if (instance->tryForward(number))
         return 0;
-    if (!instance.listen())
+    if (!instance->listen())
         std::fputs("leansip: single-instance socket unavailable; continuing without it\n", stderr);
 
     const bool spawn = !parser.isSet(connectOpt);
-    const AccountInfo account = prof->account().info();
 
     BaresipClient client;
     CallController controller(&client);
-    controller.setAccountAor(account.aor);
-    MainWindow window(account, &controller);
+    controller.setAccountAor(current.aor);
+    MainWindow window(current.info(), &controller);
 
     // Ctrl-C / SIGTERM must still run aboutToQuit so the child baresip is stopped cleanly.
     UnixSignalBridge signalBridge;
@@ -122,6 +125,9 @@ int main(int argc, char *argv[])
 
     bool quitting = false;
     int reattachAttempts = 0; // outlives the lambdas below, unlike a block-scoped local
+    int generation = 0;       // bumped on a profile switch: reconnects for the old one are void
+    QStringList daemonArgs{QStringLiteral("--ui-owned")};
+    bool switching = false;   // a profile switch is waiting for its daemon
     if (!spawn) {
         const auto endpoint = parseEndpoint(parser.value(connectOpt));
         if (!endpoint) {
@@ -132,32 +138,29 @@ int main(int argc, char *argv[])
     } else {
         // baresip belongs to leansipd, shared with leansipctl/agents. A daemon we start is ours: we
         // bind to it, and it stops when this window closes. One that leansipctl started is left alone.
-        QStringList daemonArgs{QStringLiteral("--ui-owned")};
         if (parser.isSet(recordOpt))
             daemonArgs << QStringLiteral("--record");
         controller.setDaemonMode(true);
         QString error;
-        if (!daemon::ensureRunning(prof->name, configPath, daemonArgs, &error)) {
+        if (!daemon::ensureRunning(current.name, configPath, daemonArgs, &error)) {
             QMessageBox::critical(nullptr, QStringLiteral("leansip"), QStringLiteral("Could not start leansipd:\n%1").arg(error));
             return 1;
         }
-        const QString socketPath = profile::socketPath(prof->name);
 
         // If the daemon goes away under us (crash, `leansipctl stop`), bring one back.
-        auto reattach = [&, daemonArgs, socketPath] {
-            if (quitting)
-                return;
-            QString err;
-            if (daemon::ensureRunning(prof->name, configPath, daemonArgs, &err))
-                client.connectToServer(socketPath);
-            else
-                window.statusLabel()->setText(err);
-        };
-        QObject::connect(&client, &BaresipClient::disconnected, &app, [&, reattach] {
+        QObject::connect(&client, &BaresipClient::disconnected, &app, [&] {
             if (quitting || reattachAttempts >= 3)
                 return;
             ++reattachAttempts;
-            QTimer::singleShot(300 * reattachAttempts, &app, reattach);
+            QTimer::singleShot(300 * reattachAttempts, &app, [&, gen = generation] {
+                if (quitting || gen != generation || client.isConnected())
+                    return;
+                QString err;
+                if (daemon::ensureRunning(current.name, configPath, daemonArgs, &err))
+                    client.connectToServer(profile::socketPath(current.name));
+                else
+                    window.statusLabel()->setText(err);
+            });
         });
         QObject::connect(&client, &BaresipClient::connected, &app, [&] {
             reattachAttempts = 0;
@@ -167,19 +170,75 @@ int main(int argc, char *argv[])
             client.sendCommand(QStringLiteral("leansipd_bind"));
         });
         // Only now: a Unix socket may connect synchronously, inside this call.
-        client.connectToServer(socketPath);
+        client.connectToServer(profile::socketPath(current.name));
     }
 
-    QObject::connect(&instance, &SingleInstance::numberReceived, &window,
-                     [&](const QString &n, const QString &activationToken) {
-        // QtWayland consumes XDG_ACTIVATION_TOKEN from the environment on activateWindow();
-        // without a token the compositor refuses focus to an already-running app.
-        if (!activationToken.isEmpty())
-            qputenv("XDG_ACTIVATION_TOKEN", activationToken.toUtf8());
-        if (n.isEmpty())
-            window.raiseWindow();
-        else
-            window.dialNumber(n);
+    auto wireInstance = [&] {
+        QObject::connect(instance.get(), &SingleInstance::numberReceived, &window,
+                         [&](const QString &n, const QString &activationToken) {
+            // QtWayland consumes XDG_ACTIVATION_TOKEN from the environment on activateWindow();
+            // without a token the compositor refuses focus to an already-running app.
+            if (!activationToken.isEmpty())
+                qputenv("XDG_ACTIVATION_TOKEN", activationToken.toUtf8());
+            if (n.isEmpty())
+                window.raiseWindow();
+            else
+                window.dialNumber(n);
+        });
+    };
+    wireInstance();
+
+    // Ctrl+<digit>: serve the profile with that shortcut in this window. The old profile's
+    // daemon stops with the connection if this window started it (and unregisters), as when
+    // the window closes; one leansipctl started keeps running.
+    QObject::connect(&window, &MainWindow::profileShortcut, &app, [&](int digit) {
+        auto say = [&](const QString &text) { window.statusLabel()->setText(text); };
+        if (!spawn) {
+            say(QStringLiteral("Profiles cannot be switched with --connect"));
+            return;
+        }
+        QString err;
+        const auto file = settings::load(configPath, &err); // the file as it is now
+        if (!file) {
+            say(err);
+            return;
+        }
+        const auto target = settings::byShortcut(*file, digit);
+        if (!target) {
+            say(QStringLiteral("No profile has shortcut = %1").arg(digit));
+            return;
+        }
+        if (target->name == current.name || switching)
+            return;
+        if (controller.callState() != CallController::CallState::Idle) {
+            say(QStringLiteral("Hang up before switching profiles"));
+            return;
+        }
+        // Another window already serves it: bring that one up instead.
+        if (SingleInstance(instanceName(target->name)).tryForward({}))
+            return;
+
+        ++generation;
+        reattachAttempts = 0;
+        client.disconnectFromHost();
+        current = *target;
+        instance = std::make_unique<SingleInstance>(instanceName(current.name));
+        if (!instance->listen())
+            std::fputs("leansip: single-instance socket unavailable; continuing without it\n", stderr);
+        wireInstance();
+        controller.setAccountAor(current.aor);
+        window.setAccount(current.info());
+        say(QStringLiteral("Starting %1…").arg(current.info().label()));
+        switching = true;
+        QCoreApplication::processEvents(); // show it: password_cmd may take a while
+        const bool started = daemon::ensureRunning(current.name, configPath, daemonArgs, &err);
+        switching = false;
+        if (!started) {
+            say(err.simplified());
+            return;
+        }
+        client.connectToServer(profile::socketPath(current.name));
+        window.statusLabel()->clear();
     });
 
     QObject::connect(&app, &QApplication::aboutToQuit, &app, [&] {

@@ -43,6 +43,11 @@ leansipd writes baresip's configuration directory into the runtime directory:
   send one, and an "invalid number" tone (the ITU special information tone) written as
   `error.wav`/`notfound.wav`, so baresip's own failed-call handling and leansip's local
   rejections sound the same.
+- With `--record`, baresip's `sndfile` module records both directions of every call. A daemon
+  the dialer started records them anyway, into `live/` in the runtime directory (tmpfs, 0700),
+  and announces them with an `AUDIO_TAP` event: the dialer reads the files as they grow for its
+  activity display and frees what it has read, and leansipd deletes them when the call ends and
+  removes `live/` when it exits.
 - `accounts`: the profile's account line with the password, mode 0600, never written through a
   link, and removed when leansipd exits. `uuid` when the profile sets one.
 
@@ -75,7 +80,8 @@ window ("leansip is ready") instead of focusing it.
 - `src/core/` — Qt Core/Network only, unit-tested: netstring framing, `leansip.toml`
   (`settings`), the account line, config derivation, ctrl_tcp client, call state machine,
   single-instance, the leansipd proxy (`ctrl_proxy`) and its client/launcher (`daemon_client`),
-  WAV handling and speech detection, stream format and recordings (`media_control`), call
+  WAV handling and speech detection, stream format and recordings (`media_control`), the
+  audio activity of a growing recording for the dialer (`call_audio`), call
   analysis, the ElevenLabs client.
 - `src/ui/` — the dialer widget.
 - `src/daemon/` — `leansipd`; `src/leansipctl/` — `leansipctl`.

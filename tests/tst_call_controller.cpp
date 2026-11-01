@@ -506,6 +506,38 @@ private slots:
         QVERIFY(rig.controller.ownsCall());
     }
 
+    void callAudioFollowsTheTrackedCall()
+    {
+        Rig rig;
+        QVERIFY(rig.connectAndRegister());
+        QSignalSpy audio(&rig.controller, &CallController::callAudioChanged);
+        const QJsonObject files{{"class", "leansipd"}, {"sent", "/r/c1-sent.wav"}, {"received", "/r/c1-received.wav"}};
+        auto withId = [&files](const QString &id) {
+            QJsonObject o = files;
+            o["id"] = id;
+            return o;
+        };
+        rig.server.sendEvent("AUDIO_TAP", withId("c1")); // idle: no call to attach it to
+        rig.server.sendEvent("CALL_INCOMING", {{"id", "c1"}, {"peeruri", "sip:carol@example.com"}});
+        QTRY_COMPARE(rig.controller.callState(), CallState::Incoming);
+        QVERIFY(audio.isEmpty());
+
+        rig.server.sendEvent("AUDIO_TAP", withId("other"));
+        rig.server.sendEvent("AUDIO_TAP", withId("c1"));
+        QTRY_COMPARE(audio.size(), 1);
+        QCOMPARE(rig.controller.callAudio().sent, "/r/c1-sent.wav");
+        QCOMPARE(rig.controller.callAudio().received, "/r/c1-received.wav");
+        QVERIFY(rig.controller.callAudio().temporary);
+
+        rig.server.sendEvent("RECORDING_STARTED", withId("c1"));
+        QTRY_COMPARE(audio.size(), 2);
+        QVERIFY(!rig.controller.callAudio().temporary); // a kept recording: never released
+
+        rig.server.sendEvent("CALL_CLOSED", {{"id", "c1"}});
+        QTRY_COMPARE(audio.size(), 3);
+        QVERIFY(rig.controller.callAudio().sent.isEmpty());
+    }
+
     void daemonModeTargetsTheCallAndAccountById()
     {
         Rig rig;

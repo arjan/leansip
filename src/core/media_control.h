@@ -35,6 +35,8 @@ public:
     // Returns the files when this call just got them.
     std::optional<Files> onCallEvent(const QString &callId);
     std::optional<Files> filesFor(const QString &callId) const;
+    // Drops the call; returns its files, which are left on disk.
+    std::optional<Files> forget(const QString &callId);
     QJsonObject toJson() const;
     QString incomingDir() const { return m_incoming; }
     QString recordingsDir() const { return m_recordings; }

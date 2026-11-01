@@ -14,9 +14,10 @@ struct AccountInfo {
     QString user;
     QString domain;
     QString authUser;    // falls back to `user` when absent
+    QString title;       // a name of the user's own for the account (leansip.toml `label`)
 
-    // What to show as a single label: display name if present, else the AOR.
-    QString label() const { return displayName.isEmpty() ? aor : displayName; }
+    // What to show as a single label: the title, else the display name, else the AOR.
+    QString label() const { return !title.isEmpty() ? title : displayName.isEmpty() ? aor : displayName; }
 };
 
 // A full account line. Fields we don't model are kept verbatim in `extraParams`

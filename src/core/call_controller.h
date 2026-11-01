@@ -51,6 +51,16 @@ public:
     bool ownsCall() const { return m_ownsCall; }
     QString callId() const { return m_callId; }
     bool isMuted() const { return m_muted; }
+    // The tracked call's audio as leansipd records it, when it does: what we send and what we
+    // receive, as WAV files that grow during the call. `temporary` files are deleted by
+    // leansipd when the call ends (AUDIO_TAP); the others are kept recordings.
+    struct CallAudio {
+        QString sent;
+        QString received;
+        bool temporary = false;
+        bool operator==(const CallAudio &) const = default;
+    };
+    CallAudio callAudio() const { return m_audio; }
     // Calls in progress besides the tracked one (another client's, or a second incoming call).
     int otherCallCount() const { return static_cast<int>(m_otherCalls.size()); }
 
@@ -79,6 +89,7 @@ signals:
     void backendReady();
     void muteChanged(bool muted);
     void otherCallsChanged(int count);
+    void callAudioChanged(const leansip::CallController::CallAudio &audio);
 
 private:
     void onConnected();
@@ -94,6 +105,7 @@ private:
     bool isOurCall(const QString &eventCallId) const;
     void setOtherCall(const QString &id, bool active);
     void setMuted(bool muted);
+    void setCallAudio(const CallAudio &audio);
     void resetCall();
     // "Invalid number" tone for failures baresip itself never signals (local rejection, dial error).
     void playErrorTone();
@@ -112,6 +124,7 @@ private:
     bool m_daemonMode = false;
     bool m_muted = false;
     QString m_callId;
+    CallAudio m_audio;
     QSet<QString> m_otherCalls;
     QSet<QString> m_sequenceTokens; // replies whose data is leansipd_seq's JSON array
     QHash<QString, QString> m_inflight; // token -> command name

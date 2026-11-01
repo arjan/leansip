@@ -289,6 +289,11 @@ void CallController::onEvent(const BaresipEvent &ev)
         emit callEnded(ev.param.trimmed());
         if (!sound.isEmpty() && m_localTones && m_client->isConnected())
             sendTracked(QStringLiteral("play"), sound);
+    } else if (ev.klass == QLatin1String("leansipd")
+               && (t == QLatin1String("RECORDING_STARTED") || t == QLatin1String("AUDIO_TAP"))) {
+        if (m_callState == CallState::Idle || ev.callId.isEmpty() || ev.callId != m_callId)
+            return;
+        setCallAudio({ev.sent, ev.received, t == QLatin1String("AUDIO_TAP")});
     } else if (ev.klass == QLatin1String("leansipd") && t == QLatin1String("BACKEND_DOWN")) {
         m_backendAvailable = false;
         resetCall();
@@ -392,8 +397,17 @@ void CallController::setCallState(CallState state)
         m_ownsCall = false;
         m_callId.clear();
         setMuted(false);
+        setCallAudio({});
     }
     emit callStateChanged(state);
+}
+
+void CallController::setCallAudio(const CallAudio &audio)
+{
+    if (m_audio == audio)
+        return;
+    m_audio = audio;
+    emit callAudioChanged(m_audio);
 }
 
 void CallController::setRegistration(RegistrationState state, const QString &detail)

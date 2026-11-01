@@ -74,6 +74,16 @@ std::optional<RecordingTracker::Files> RecordingTracker::filesFor(const QString 
     return *it;
 }
 
+std::optional<RecordingTracker::Files> RecordingTracker::forget(const QString &callId)
+{
+    const auto it = m_byCall.find(callId);
+    if (it == m_byCall.end())
+        return std::nullopt;
+    Files files = *it;
+    m_byCall.erase(it);
+    return files;
+}
+
 QJsonObject RecordingTracker::toJson() const
 {
     QJsonObject out;

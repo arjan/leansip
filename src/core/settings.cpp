@@ -220,6 +220,14 @@ struct Reader {
             bool ok = true;
             if (key == QLatin1String("display_name"))
                 ok = string(v, at, &p->displayName);
+            else if (key == QLatin1String("label"))
+                ok = string(v, at, &p->label);
+            else if (key == QLatin1String("shortcut")) {
+                const auto *i = v.as_integer();
+                if (!i || i->get() < 0 || i->get() > 9)
+                    return fail(at, QStringLiteral("expected a digit 0..9 (Ctrl+<digit> in the dialer)"));
+                p->shortcut = static_cast<int>(i->get());
+            }
             else if (key == QLatin1String("aor"))
                 ok = string(v, at, &p->aor);
             else if (key == QLatin1String("transport"))
@@ -301,6 +309,24 @@ AccountRecord Profile::account() const
     return r;
 }
 
+AccountInfo Profile::info() const
+{
+    AccountInfo i = account().info();
+    i.title = label;
+    return i;
+}
+
+std::optional<Profile> byShortcut(const File &file, int digit)
+{
+    if (digit < 0)
+        return std::nullopt;
+    for (const Profile &p : file.profiles) {
+        if (p.shortcut == digit)
+            return p;
+    }
+    return std::nullopt;
+}
+
 QString defaultPath()
 {
     const QString env = qEnvironmentVariable("LEANSIP_CONFIG");
@@ -350,6 +376,13 @@ std::optional<File> parse(const QString &text, QString *error)
                 Profile p;
                 if (!r.profile(qs(name.str()), node, shared, &p))
                     return std::nullopt;
+                for (const Profile &other : std::as_const(file.profiles)) {
+                    if (p.shortcut >= 0 && other.shortcut == p.shortcut) {
+                        r.fail(QStringLiteral("profiles.%1.shortcut").arg(p.name),
+                               QStringLiteral("%1 is already the shortcut of profile %2").arg(p.shortcut).arg(other.name));
+                        return std::nullopt;
+                    }
+                }
                 file.profiles.insert(p.name, p);
             }
         } else if (key != QLatin1String("baresip")) {

@@ -59,7 +59,7 @@ const CommandHelp kCommands[] = {
 Not running: {"ok":true,"running":false,...} and exit code 3.)"},
     {"profiles", "profiles", "list the profiles in leansip.toml and which ones run",
      R"(Needs no daemon. Prints {"ok":true,"config":<path>,"default":<name>,"profiles":[...]}
-with name, aor, displayName, confirmDial and running for each profile. Passwords never
+with name, aor, displayName, label, shortcut, confirmDial and running for each profile. Passwords never
 appear.)"},
     {"start", "start [--sip-trace] [--record] [--max-call-seconds S]", "start leansipd for this profile (no-op if running)",
      R"(Starts leansipd in the background and returns once baresip is reachable (up to 5 s
@@ -170,7 +170,7 @@ that fires before `wait` starts is not missed:
 
 Types: CALL_INCOMING CALL_RINGING CALL_PROGRESS CALL_ESTABLISHED CALL_CLOSED CALL_DTMF_START
 CALL_DTMF_END CALL_AUDIO REGISTER_OK REGISTER_FAIL, and leansipd's BACKEND_UP BACKEND_DOWN
-PLAY_STARTED PLAY_ENDED RECORDING_STARTED RECORDING_DONE CALL_LIMIT.)"},
+PLAY_STARTED PLAY_ENDED RECORDING_STARTED RECORDING_DONE AUDIO_TAP CALL_LIMIT.)"},
     {"help", "help [command]", "this overview, or details on one command", ""},
 };
 
@@ -525,6 +525,8 @@ int main(int argc, char *argv[])
             list.append(QJsonObject{{QStringLiteral("name"), p.name},
                                     {QStringLiteral("aor"), p.aor},
                                     {QStringLiteral("displayName"), p.displayName},
+                                    {QStringLiteral("label"), p.label},
+                                    {QStringLiteral("shortcut"), p.shortcut >= 0 ? QJsonValue(p.shortcut) : QJsonValue()},
                                     {QStringLiteral("confirmDial"), p.confirmDial},
                                     {QStringLiteral("running"), daemon::isRunning(profile::socketPath(p.name), 200)}});
         }

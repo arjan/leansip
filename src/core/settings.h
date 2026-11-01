@@ -33,7 +33,9 @@ using BaresipSettings = QMap<QString, QStringList>;
 
 struct Profile {
     QString name;
-    QString displayName;
+    QString displayName; // SIP display name, sent to the far end
+    QString label;       // the dialer's name for this profile; empty: display name or AOR
+    int shortcut = -1;   // 0..9: Ctrl+<digit> switches the dialer to this profile; -1: none
     QString aor;         // "sip:user@domain[:port]" or "sips:..."
     QString transport;   // "", "udp", "tcp" or "tls"
     QString authUser;
@@ -49,6 +51,8 @@ struct Profile {
 
     // The account without its password, for display and validation.
     AccountRecord account() const;
+    // What the dialer shows: the account, titled with `label` when set.
+    AccountInfo info() const;
 };
 
 struct File {
@@ -56,6 +60,9 @@ struct File {
     QString defaultProfile;
     QMap<QString, Profile> profiles;
 };
+
+// The profile with `shortcut = digit`, if any.
+std::optional<Profile> byShortcut(const File &file, int digit);
 
 // $LEANSIP_CONFIG, else $XDG_CONFIG_HOME/leansip/leansip.toml.
 QString defaultPath();

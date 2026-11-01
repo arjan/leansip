@@ -1,5 +1,8 @@
 #include "main_window.h"
 
+#include "waveform_view.h"
+
+#include <QApplication>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -53,6 +56,7 @@ constexpr auto kInk = "#33352d";
 constexpr auto kLcd = "#b7c29d";
 constexpr auto kLcdInk = "#1d2615";
 constexpr auto kLcdDim = "#62704f";
+constexpr auto kRingFlash = "#f2c14e"; // the case lights up amber while a call rings
 
 QFont monoFont(int pointSize, bool bold = false)
 {
@@ -61,6 +65,13 @@ QFont monoFont(int pointSize, bool bold = false)
     f.setPointSize(pointSize);
     f.setBold(bold);
     return f;
+}
+
+// Inverted text on the LCD, like a lit segment label.
+QString indicatorTag(const QString &text)
+{
+    return QStringLiteral("<span style=\"background:%1; color:%2;\">&nbsp;%3&nbsp;</span>")
+        .arg(QLatin1String(kLcdInk), QLatin1String(kLcd), text);
 }
 
 bool isDtmf(const QString &text)
@@ -81,13 +92,12 @@ MainWindow::MainWindow(const AccountInfo &account, CallController *controller, Q
     connect(m_controller, &CallController::registrationStateChanged, this, &MainWindow::updateRegistration);
     connect(m_controller, &CallController::peerChanged, this, [this](const QString &peer) {
         if (m_controller->callState() == CallController::CallState::Incoming)
-            m_status->setText(tr("Incoming: %1").arg(peer));
+            m_number->setText(peer);
     });
     connect(m_controller, &CallController::callEnded, this, [this](const QString &reason) {
         m_status->setText(reason.isEmpty() ? tr("Call ended") : tr("Ended: %1").arg(reason));
-        // Back to normal editing: bright text, dialled number restored for a retry.
+        // Back to normal editing, the dialled number restored for a retry.
         m_dtmfFlash.stop();
-        setNumberDim(false);
         m_number->setText(m_outgoingCall ? m_lastDialed : QString());
     });
     connect(m_controller, &CallController::commandFailed, this, [this](const QString &cmd, const QString &detail) {
@@ -97,12 +107,20 @@ MainWindow::MainWindow(const AccountInfo &account, CallController *controller, Q
     connect(m_controller, &CallController::backendReady, this, [this] { updateForState(m_controller->callState()); });
     connect(m_controller, &CallController::muteChanged, this, &MainWindow::updateIndicators);
     connect(m_controller, &CallController::otherCallsChanged, this, &MainWindow::updateIndicators);
+    connect(m_controller, &CallController::callAudioChanged, this, &MainWindow::onCallAudio);
+    connect(&m_audioMonitor, &CallAudioMonitor::waveformsChanged, this,
+            [this](const QVector<float> &received, const QVector<float> &sent) {
+                m_receivedWave->setPoints(received);
+                m_sentWave->setPoints(sent);
+            });
 
     m_elapsedTimer.setInterval(1000);
     connect(&m_elapsedTimer, &QTimer::timeout, this, &MainWindow::tickElapsed);
+    m_ringFlash.setInterval(kRingFlashMs);
+    connect(&m_ringFlash, &QTimer::timeout, this, [this] { setFlash(!isFlashing()); });
     m_dtmfFlash.setSingleShot(true);
     m_dtmfFlash.setInterval(kDtmfFlashMs);
-    connect(&m_dtmfFlash, &QTimer::timeout, this, &MainWindow::showPeerNumber);
+    connect(&m_dtmfFlash, &QTimer::timeout, m_number, &QLineEdit::clear);
 
     updateRegistration(m_controller->registrationState(), m_controller->registrationDetail());
     updateForState(m_controller->callState());
@@ -116,12 +134,14 @@ void MainWindow::buildUi(const AccountInfo &account)
     // Frameless windows have no border of their own; the case outline is drawn here.
     setStyleSheet(QStringLiteral(
                       "#leansip { background: %1; border: 2px solid %2; }"
+                      "#leansip[flash=\"true\"] { background: %5; }"
                       "QLabel { color: %2; }"
                       "QFrame#lcd { background: %3; border: 2px solid; border-radius: 3px;"
                       "  border-color: #4c5440 #d9e0c6 #d9e0c6 #4c5440; }"
                       "QFrame#lcd QLabel { color: %4; }"
                       "QLineEdit#numberEdit { border: none; background: transparent; padding: 0; }")
-                      .arg(QLatin1String(kCase), QLatin1String(kInk), QLatin1String(kLcd), QLatin1String(kLcdInk)));
+                      .arg(QLatin1String(kCase), QLatin1String(kInk), QLatin1String(kLcd), QLatin1String(kLcdInk),
+                           QLatin1String(kRingFlash)));
     setAttribute(Qt::WA_StyledBackground, true); // a plain QWidget ignores QSS background/border otherwise
 
     m_pages = new QStackedLayout(this);
@@ -158,13 +178,45 @@ void MainWindow::buildUi(const AccountInfo &account)
     lcdLayout->setContentsMargins(4, 2, 4, 4);
     lcdLayout->setSpacing(0);
 
+    // Created first, so it is painted under the number field.
+    m_receivedWave = new WaveformView(lcd);
+    m_receivedWave->setObjectName(QStringLiteral("receivedWave"));
+    m_receivedWave->setColor(QColor(QLatin1String(kLcdInk)));
+    m_receivedWave->setBars(16, 0.6);
+    m_receivedWave->setWindowMs(1000);
+    m_receivedWave->hide();
+
+    auto *topRow = new QHBoxLayout;
+    topRow->setContentsMargins(0, 0, 0, 0);
+    topRow->setSpacing(4);
     m_indicators = new QLabel(lcd);
     m_indicators->setObjectName(QStringLiteral("indicatorLabel"));
     m_indicators->setAlignment(Qt::AlignRight);
     m_indicators->setFont(monoFont(7, true));
     m_indicators->setTextFormat(Qt::RichText);
     m_indicators->setFixedHeight(m_indicators->fontMetrics().height()); // reserved, so nothing jumps
-    lcdLayout->addWidget(m_indicators);
+    topRow->addWidget(m_indicators, 1);
+    // The corner slot: the microphone's level, or MUTE in its place. Always reserved, so the
+    // indicators beside it never shift.
+    auto *micSlot = new QWidget(lcd);
+    m_muteLabel = new QLabel(micSlot);
+    m_muteLabel->setObjectName(QStringLiteral("muteLabel"));
+    m_muteLabel->setFont(monoFont(7, true));
+    m_muteLabel->setTextFormat(Qt::RichText);
+    m_muteLabel->setText(indicatorTag(tr("MUTE")));
+    const QSize slot(m_muteLabel->sizeHint().width(), m_indicators->height());
+    micSlot->setFixedSize(slot);
+    m_muteLabel->setGeometry(QRect(QPoint(0, 0), slot));
+    m_muteLabel->hide();
+    m_sentWave = new WaveformView(micSlot);
+    m_sentWave->setObjectName(QStringLiteral("sentWave"));
+    m_sentWave->setColor(QColor(QLatin1String(kLcdInk)));
+    m_sentWave->setBars(8, 0.5);
+    m_sentWave->setWindowMs(1000);
+    m_sentWave->setGeometry(QRect(QPoint(0, 0), slot));
+    m_sentWave->hide();
+    topRow->addWidget(micSlot);
+    lcdLayout->addLayout(topRow);
 
     m_number = new QLineEdit(lcd);
     m_number->setObjectName(QStringLiteral("numberEdit"));
@@ -226,6 +278,7 @@ QWidget *MainWindow::buildHelpPage()
         "<b>Esc</b> &nbsp;hang up &middot; decline &middot; clear &middot; quit when empty<br>"
         "<b>&uarr;</b> &nbsp;recall last number<br>"
         "<b>m</b> &nbsp;mute &middot; unmute the microphone in a call<br>"
+        "<b>Ctrl+0-9</b> &nbsp;switch to the profile with that shortcut<br>"
         "<b>? F1</b> &nbsp;this help<br>"
         "<b>Ctrl+Q</b> &nbsp;quit</p>"
         "<p>Drag anywhere to move the window. Esc closes this screen.</p>"));
@@ -246,6 +299,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             return true;
         if (event->type() == QEvent::Resize)
             fitNumberFont(); // the field's width is only known once the layout has run
+        if (event->type() == QEvent::Resize || event->type() == QEvent::Move)
+            placeReceivedWave();
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -265,6 +320,10 @@ bool MainWindow::handleKey(QKeyEvent *event)
 
     if (ctrl && key == Qt::Key_Q) {
         close();
+        return true;
+    }
+    if (ctrl && key >= Qt::Key_0 && key <= Qt::Key_9) {
+        emit profileShortcut(key - Qt::Key_0);
         return true;
     }
     if (key == Qt::Key_Question || key == Qt::Key_F1) {
@@ -305,9 +364,8 @@ bool MainWindow::handleKey(QKeyEvent *event)
     }
     if (state == S::Active && isDtmf(event->text())) {
         m_controller->sendDtmf(event->text().at(0));
-        // Flash the digit bright, then fall back to the dimmed peer number.
+        // Flash the digit, then clear the field again for the waveform.
         m_number->setText(event->text());
-        setNumberDim(false);
         m_dtmfFlash.start();
         return true;
     }
@@ -375,10 +433,17 @@ void MainWindow::mousePressEvent(QMouseEvent *event)
 
 void MainWindow::fitNumberFont()
 {
-    const QString text = m_number->text().isEmpty() ? m_number->placeholderText() : m_number->text();
+    QFont font = m_number->font();
+    if (m_number->text().isEmpty()) {
+        // The placeholder is a hint, not a number: small, so the field reads as empty.
+        font.setPointSize(kPlaceholderPt);
+        if (font.pointSize() != m_number->font().pointSize())
+            m_number->setFont(font);
+        return;
+    }
+    const QString text = m_number->text();
     // Fixed slack (not font-relative) so repeated fits of the same text converge on one size.
     const int available = m_number->contentsRect().width() - 8;
-    QFont font = m_number->font();
     int pt = kNumberMaxPt;
     for (; pt > kNumberMinPt; --pt) {
         font.setPointSize(pt);
@@ -411,6 +476,17 @@ void MainWindow::updateForState(CallController::CallState state)
     using S = CallController::CallState;
     m_number->setReadOnly(state != S::Idle);
 
+    if (state == S::Incoming && !m_ringFlash.isActive()) {
+        // Ringing: to the front (the compositor may only flag the window instead) and flash.
+        raiseWindow();
+        QApplication::alert(this);
+        setFlash(true);
+        m_ringFlash.start();
+    } else if (state != S::Incoming && m_ringFlash.isActive()) {
+        m_ringFlash.stop();
+        setFlash(false);
+    }
+
     switch (state) {
     case S::Idle:
         m_elapsedTimer.stop();
@@ -422,14 +498,17 @@ void MainWindow::updateForState(CallController::CallState state)
         m_status->setText(tr("Calling %1…").arg(m_controller->peer()));
         break;
     case S::Incoming:
+        // The caller large in the display, what to do about it below.
         m_outgoingCall = false;
-        m_status->setText(tr("Incoming: %1").arg(m_controller->peer()));
+        m_number->setText(m_controller->peer());
+        m_status->setText(tr("press Enter to accept"));
         break;
     case S::Active:
-        // Entering the call (not every refresh): the peer moves to the status line and the
-        // field starts collecting DTMF digits.
+        // Entering the call (not every refresh): the peer moves to the status line, and the
+        // field is cleared for the waveform and the DTMF digits sent.
         if (m_appliedState != S::Active) {
-            showPeerNumber();
+            m_number->clear();
+            m_number->setPlaceholderText(QString());
             m_callClock.start();
             m_elapsedTimer.start();
             tickElapsed();
@@ -480,35 +559,53 @@ void MainWindow::showError(const QString &message)
 
 void MainWindow::tickElapsed()
 {
-    // The peer is in the number field during a call; the status just carries the clock.
-    m_status->setText(tr("Connected %1").arg(formatElapsed(m_callClock.elapsed())));
-}
-
-void MainWindow::showPeerNumber()
-{
-    m_number->setText(m_controller->peer());
-    setNumberDim(true);
+    m_status->setText(tr("%1 · %2").arg(m_controller->peer(), formatElapsed(m_callClock.elapsed())));
 }
 
 void MainWindow::updateIndicators()
 {
-    QStringList tags;
-    const QString tag = QStringLiteral("<span style=\"background:%1; color:%2;\">&nbsp;%3&nbsp;</span>");
-    if (m_controller->isMuted())
-        tags << tag.arg(QLatin1String(kLcdInk), QLatin1String(kLcd), tr("MUTE"));
-    if (const int others = m_controller->otherCallCount(); others > 0)
-        tags << tag.arg(QLatin1String(kLcdInk), QLatin1String(kLcd), tr("+%n CALL(S)", nullptr, others));
-    m_indicators->setText(tags.join(QStringLiteral("&nbsp;")));
+    const int others = m_controller->otherCallCount();
+    m_indicators->setText(others > 0 ? indicatorTag(tr("+%n CALL(S)", nullptr, others)) : QString());
+    m_muteLabel->setVisible(m_controller->isMuted());
+    updateWaveforms();
 }
 
-void MainWindow::setNumberDim(bool dim)
+bool MainWindow::isFlashing() const
 {
-    if (m_number->property("dim").toBool() == dim)
-        return;
-    m_number->setProperty("dim", dim);
-    QPalette p = m_number->palette();
-    p.setColor(QPalette::Text, QColor(QLatin1String(dim ? kLcdDim : kLcdInk)));
-    m_number->setPalette(p);
+    return property("flash").toBool();
+}
+
+void MainWindow::setFlash(bool on)
+{
+    setProperty("flash", on);
+    // A dynamic property only takes effect in the style sheet after a re-polish.
+    style()->unpolish(this);
+    style()->polish(this);
+    update();
+}
+
+void MainWindow::onCallAudio(const CallController::CallAudio &audio)
+{
+    if (audio.sent.isEmpty() && audio.received.isEmpty())
+        m_audioMonitor.stop();
+    else
+        m_audioMonitor.start(audio.sent, audio.received, audio.temporary);
+    updateWaveforms();
+}
+
+void MainWindow::updateWaveforms()
+{
+    const bool inCall = m_audioMonitor.isRunning();
+    m_receivedWave->setVisible(inCall);
+    m_sentWave->setVisible(inCall && !m_controller->isMuted());
+}
+
+void MainWindow::placeReceivedWave()
+{
+    // Behind the digits, with a fifth of the field's width free on either side.
+    const QRect field = m_number->geometry();
+    const int pad = field.width() / 5;
+    m_receivedWave->setGeometry(field.adjusted(pad, 3, -pad, -3));
 }
 
 } // namespace leansip

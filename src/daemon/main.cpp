@@ -203,16 +203,23 @@ int main(int argc, char *argv[])
     QObject::connect(&process, &BaresipProcess::outputReceived, &app, [&](const QByteArray &data) { log.write(data); });
     if (parser.isSet(traceOpt))
         process.setExtraArgs({QStringLiteral("-s")});
+    // Recording keeps both directions of every call. Without it, a daemon the dialer started
+    // still records, into <runtime dir>/live (tmpfs, private), for the dialer's level display,
+    // and deletes each call's files when the call ends (AUDIO_TAP instead of RECORDING_*).
+    const QString liveDir = QDir(runtimeDir).filePath(QStringLiteral("live"));
+    const bool liveTap = !recording && uiOwned;
+    QDir(liveDir).removeRecursively(); // left over from a daemon that did not exit cleanly
     std::unique_ptr<RecordingTracker> recordings;
-    if (recording) {
-        const QString incoming = QDir(recordingsDir).filePath(QStringLiteral(".incoming"));
+    if (recording || liveTap) {
+        const QString keepDir = recording ? recordingsDir : liveDir;
+        const QString incoming = QDir(keepDir).filePath(QStringLiteral(".incoming"));
         if (!QDir().mkpath(incoming)) {
             qCritical("leansipd: cannot create %s", qPrintable(incoming));
             return 1;
         }
-        QFile::setPermissions(recordingsDir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+        QFile::setPermissions(keepDir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
         process.setRecordDir(incoming);
-        recordings = std::make_unique<RecordingTracker>(incoming, recordingsDir);
+        recordings = std::make_unique<RecordingTracker>(incoming, keepDir);
     }
     if (!process.start(*setup)) {
         qCritical("leansipd: cannot start baresip: %s", qPrintable(process.lastError()));
@@ -381,7 +388,8 @@ int main(int argc, char *argv[])
         if (recordings) {
             if (const auto files = recordings->onCallEvent(id)) {
                 proxy.publishEvent({{QStringLiteral("class"), QStringLiteral("leansipd")},
-                                    {QStringLiteral("type"), QStringLiteral("RECORDING_STARTED")},
+                                    {QStringLiteral("type"), recording ? QStringLiteral("RECORDING_STARTED")
+                                                                       : QStringLiteral("AUDIO_TAP")},
                                     {QStringLiteral("id"), id},
                                     {QStringLiteral("sent"), files->sent},
                                     {QStringLiteral("received"), files->received}});
@@ -429,7 +437,13 @@ int main(int argc, char *argv[])
                 t->deleteLater();
             if (playing && playing->callId == id)
                 endPlayback(QStringLiteral("call closed"));
-            if (recordings) {
+            if (recordings && !recording) {
+                if (const auto files = recordings->forget(id)) {
+                    // Readers that still have them open keep reading until they close them.
+                    QFile::remove(files->sent);
+                    QFile::remove(files->received);
+                }
+            } else if (recordings) {
                 if (const auto files = recordings->filesFor(id)) {
                     proxy.publishEvent({{QStringLiteral("class"), QStringLiteral("leansipd")},
                                         {QStringLiteral("type"), QStringLiteral("RECORDING_DONE")},
@@ -466,7 +480,7 @@ int main(int argc, char *argv[])
         return CtrlProxy::Result{true, compact(s)};
     });
     proxy.addCommand(QStringLiteral("leansipd_recordings"), [&](const QString &) {
-        if (!recordings)
+        if (!recording)
             return CtrlProxy::Result{false, QStringLiteral("recording is off: start the daemon with --record, "
                                                            "or set record = true in the profile")};
         return CtrlProxy::Result{true, compact(recordings->toJson())};
@@ -526,6 +540,7 @@ int main(int argc, char *argv[])
         }
         process.stop();
         QFile::remove(QDir(runtimeDir).filePath(QStringLiteral("accounts"))); // holds the password
+        QDir(liveDir).removeRecursively(); // call audio
         if (playing)
             QFile::remove(playing->file);
         qInfo("leansipd: stopped");

@@ -96,6 +96,41 @@ account_params = { audio_codecs = "G722/16000/1", regint = 0 }
         QVERIFY(!error.contains("a;b"));
     }
 
+    void labelAndShortcut()
+    {
+        QString error;
+        const auto f = settings::parse(QStringLiteral(R"(
+[profiles.desk]
+display_name = "Arjan"
+label = "Desk"
+shortcut = 1
+aor = "sip:phone1@pbx.example.com"
+
+[profiles.lab]
+aor = "sip:lab@pbx.example.com"
+shortcut = 0
+
+[profiles.plain]
+aor = "sip:plain@pbx.example.com"
+)"), &error);
+        QVERIFY2(f, qPrintable(error));
+        const settings::Profile &desk = f->profiles.value("desk");
+        QCOMPARE(desk.label, "Desk");
+        QCOMPARE(desk.shortcut, 1);
+        // The label is the dialer's name for it; the SIP display name is unchanged.
+        QCOMPARE(desk.info().label(), "Desk");
+        QCOMPARE(desk.info().displayName, "Arjan");
+        QCOMPARE(desk.account().info().label(), "Arjan");
+        QVERIFY(!settings::accountLine(desk, "pw", &error)->contains("Desk"));
+        QCOMPARE(f->profiles.value("lab").info().label(), "sip:lab@pbx.example.com");
+        QCOMPARE(f->profiles.value("plain").shortcut, -1);
+
+        QCOMPARE(settings::byShortcut(*f, 1)->name, "desk");
+        QCOMPARE(settings::byShortcut(*f, 0)->name, "lab");
+        QVERIFY(!settings::byShortcut(*f, 2));
+        QVERIFY(!settings::byShortcut(*f, -1)); // "none" is not a shortcut
+    }
+
     void rejectsMistakes_data()
     {
         QTest::addColumn<QString>("toml");
@@ -121,6 +156,12 @@ account_params = { audio_codecs = "G722/16000/1", regint = 0 }
         QTest::newRow("owned param") << "[profiles.x]\n" + aor + "account_params = { auth_pass = \"x\" }" << "not in account_params";
         QTest::newRow("relative record_dir") << "[profiles.x]\n" + aor + "record_dir = \"calls\"" << "absolute";
         QTest::newRow("bad uuid") << "[profiles.x]\n" + aor + "uuid = \"not a uuid\"" << "UUID";
+        QTest::newRow("shortcut too big") << "[profiles.x]\n" + aor + "shortcut = 10" << "profiles.x.shortcut: expected a digit";
+        QTest::newRow("shortcut negative") << "[profiles.x]\n" + aor + "shortcut = -1" << "expected a digit";
+        QTest::newRow("shortcut string") << "[profiles.x]\n" + aor + "shortcut = \"1\"" << "expected a digit";
+        QTest::newRow("shortcut twice") << "[profiles.x]\n" + aor + "shortcut = 1\n[profiles.y]\n" + aor + "shortcut = 1"
+                                        << "already the shortcut of profile x";
+        QTest::newRow("label newline") << "[profiles.x]\n" + aor + "label = \"a\\nb\"" << "single line";
     }
 
     void rejectsMistakes()

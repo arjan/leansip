@@ -40,6 +40,8 @@ qt_add_library(leansip_core STATIC
     core/log_file.h
     core/call_analysis.cpp
     core/call_analysis.h
+    core/call_audio.cpp
+    core/call_audio.h
 )
 target_include_directories(leansip_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(leansip_core PUBLIC Qt6::Core Qt6::Network PRIVATE leansip_warnings)
@@ -49,6 +51,8 @@ target_compile_definitions(leansip_core PUBLIC LEANSIP_VERSION="${PROJECT_VERSIO
 qt_add_library(leansip_ui STATIC
     ui/main_window.cpp
     ui/main_window.h
+    ui/waveform_view.cpp
+    ui/waveform_view.h
 )
 target_link_libraries(leansip_ui PUBLIC leansip_core Qt6::Widgets PRIVATE leansip_warnings)
 

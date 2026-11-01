@@ -22,7 +22,10 @@ audio_player = "pulse,"
 audio_source = "pulse,"
 
 [profiles.desk]
-display_name = "Desk"              # optional; shown in the dialer
+display_name = "Desk"              # optional; the SIP display name the far end sees
+label = "Desk phone"               # optional; the dialer's name for it (default: display_name,
+                                   #   else the address, which stays in the label's tooltip)
+shortcut = 1                       # optional; Ctrl+1 switches the dialer to this profile
 aor = "sip:phone1@pbx.example.com" # sip:user@domain[:port], or sips:
 transport = "udp"                  # optional: udp, tcp or tls
 auth_user = "phone1"               # optional; defaults to the user part
@@ -38,6 +41,14 @@ confirm_dial = false               # true: `leansipctl dial` needs --yes (for re
 jitter_buffer_delay = "5-10"
 module_app = ["account.so", "contact.so", "debug_cmd.so", "menu.so", "netroam.so"]
 ```
+
+## Switching profiles in the dialer
+
+Ctrl+<digit> in the dialer switches its window to the profile with that `shortcut` (each digit at
+most once in the file). The file is read again at that moment, so a new shortcut works without
+restarting. The old profile's leansipd stops, and unregisters, if the dialer started it; one that
+`leansipctl start` started keeps running. Switching waits until there is no call, and when another
+dialer window already serves the profile, that window comes to the front instead.
 
 ## Passwords
 

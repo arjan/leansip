@@ -103,6 +103,7 @@ per event) and `ts` (milliseconds since the epoch). leansipd keeps the last 2000
 | `CALL_LIMIT` | leansipd hung up a call at `--max-call-seconds` |
 | `PLAY_STARTED`, `PLAY_ENDED` | a `say`/`play` clip; `PLAY_ENDED` `param` is `done` or `call closed` |
 | `RECORDING_STARTED`, `RECORDING_DONE` | with `--record`: the call's `sent` and `received` WAV paths |
+| `AUDIO_TAP` | without `--record`, in a daemon the dialer started: the same paths, for the dialer's activity display; deleted when the call ends |
 | `BACKEND_UP`, `BACKEND_DOWN` | class `leansipd`: baresip (re)started or went away; `param` says why |
 
 `events --since N` prints the journal after `N`; `--follow` keeps printing. `events` and `wait`

@@ -16,6 +16,8 @@ struct BaresipEvent {
     QString peerDisplayName;
     QString param;           // type-specific: close reason, register status text, ...
     QString callId;          // "id": the call an event is about (empty for non-call events)
+    QString sent;            // leansipd's RECORDING_STARTED / AUDIO_TAP: the call's audio files
+    QString received;
 
     static std::optional<BaresipEvent> fromJson(const QJsonObject &obj);
 };
