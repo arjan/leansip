@@ -4,15 +4,14 @@
 
 namespace leansip {
 
-// Where the per-baresip-directory runtime state lives. The GUI, leansipd and sipctl all derive
-// the same paths from the baresip directory, so they meet without any configuration.
+// Where a profile's runtime state lives. The GUI, leansipd and leansipctl all derive the same paths
+// from the profile name, so they meet without any further configuration.
 namespace profile {
 
-QString defaultBaresipDir(); // ~/.baresip
-// $XDG_RUNTIME_DIR/leansip<suffix>: leansipd's derived baresip config, socket and log (0700).
-QString runtimeDir(const QString &baresipDir);
-QString socketPath(const QString &baresipDir);
-QString logPath(const QString &baresipDir);
+// $XDG_RUNTIME_DIR/leansip-<name>: leansipd's baresip config, socket, log and media (0700).
+QString runtimeDir(const QString &name);
+QString socketPath(const QString &name);
+QString logPath(const QString &name);
 
 } // namespace profile
 } // namespace leansip

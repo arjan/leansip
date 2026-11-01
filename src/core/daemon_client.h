@@ -1,6 +1,5 @@
 #pragma once
 
-#include "baresip_backend.h"
 #include "netstring.h"
 
 #include <QJsonObject>
@@ -19,12 +18,12 @@ QString executable();
 // True when a leansipd accepts connections on `socketPath`.
 bool isRunning(const QString &socketPath, int timeoutMs = 300);
 
-// Starts leansipd for `baresipDir` unless one already runs, and waits until it accepts
-// connections. The daemon gets its own session (so a closing terminal or launcher does not take
-// it down) and logs to profile::logPath(). `daemonArgs` go to leansipd, e.g. "--ui-owned".
-// `started`, if given, says whether this call launched it.
-bool ensureRunning(const QString &baresipDir, const QStringList &daemonArgs, QString *error,
-                   bool *started = nullptr, int timeoutMs = 5000);
+// Starts leansipd for a profile of `configPath` unless one already runs, and waits until it
+// accepts connections or exits. The daemon gets its own session (so a closing terminal or
+// launcher does not take it down) and logs to profile::logPath(). `daemonArgs` go to leansipd,
+// e.g. "--ui-owned". `started`, if given, says whether this call launched it.
+bool ensureRunning(const QString &profileName, const QString &configPath, const QStringList &daemonArgs,
+                   QString *error, bool *started = nullptr, int timeoutMs = 90000);
 
 struct Reply {
     bool ok = false;
@@ -51,27 +50,6 @@ private:
     QList<QJsonObject> m_events;
     QList<QJsonObject> m_responses;
     quint64 m_nextToken = 1;
-};
-
-// BaresipBackend for a dialer whose baresip is owned by leansipd: restarts go through the
-// daemon, and the client's connection to the daemon stays up across them.
-class DaemonBackend : public BaresipBackend {
-public:
-    explicit DaemonBackend(QString baresipDir);
-
-    bool restart() override;
-    QString host() const override { return {}; }
-    quint16 port() const override { return 0; }
-    QString derivedAccountsPath() const override;
-    void setAccountsOverride(bool enabled) override { m_override = enabled; }
-    QString lastError() const override { return m_error; }
-    void detachClient(BaresipClient *) override {}
-    void attachClient(BaresipClient *) override {}
-
-private:
-    QString m_baresipDir;
-    QString m_error;
-    bool m_override = false;
 };
 
 } // namespace leansip::daemon

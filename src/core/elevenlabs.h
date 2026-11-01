@@ -7,7 +7,7 @@
 #include <optional>
 
 // ElevenLabs speech-to-text and text-to-speech, the only speech services leansip uses.
-// Blocking calls (they run a local event loop); meant for sipctl, not for the GUI thread.
+// Blocking calls (they run a local event loop); meant for leansipctl, not for the GUI thread.
 namespace leansip::elevenlabs {
 
 struct Config {

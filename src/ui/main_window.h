@@ -27,11 +27,8 @@ public:
     // Fills the number field and dials (used for the CLI argument and forwarded numbers).
     void dialNumber(const QString &number);
     void raiseWindow();
-    // Swap the account shown in the header (after the accounts dialog saved a new active one).
+    // Swap the account shown in the header.
     void setAccount(const AccountInfo &account);
-
-signals:
-    void configureRequested(); // F2
 
 public:
     // Accessors for tests.

@@ -1,30 +1,24 @@
 #include "profile.h"
 
 #include "baresip_process.h"
-#include "single_instance.h"
 
 #include <QDir>
 
 namespace leansip::profile {
 
-QString defaultBaresipDir()
+QString runtimeDir(const QString &name)
 {
-    return QDir::home().filePath(QStringLiteral(".baresip"));
+    return BaresipProcess::defaultDerivedDir() + u'-' + name;
 }
 
-QString runtimeDir(const QString &baresipDir)
+QString socketPath(const QString &name)
 {
-    return BaresipProcess::defaultDerivedDir() + SingleInstance::profileSuffix(baresipDir);
+    return QDir(runtimeDir(name)).filePath(QStringLiteral("leansipd.sock"));
 }
 
-QString socketPath(const QString &baresipDir)
+QString logPath(const QString &name)
 {
-    return QDir(runtimeDir(baresipDir)).filePath(QStringLiteral("leansipd.sock"));
-}
-
-QString logPath(const QString &baresipDir)
-{
-    return QDir(runtimeDir(baresipDir)).filePath(QStringLiteral("leansipd.log"));
+    return QDir(runtimeDir(name)).filePath(QStringLiteral("leansipd.log"));
 }
 
 } // namespace leansip::profile

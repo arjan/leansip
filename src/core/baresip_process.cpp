@@ -73,51 +73,12 @@ QString BaresipProcess::defaultDerivedDir()
     return QDir(base).filePath(QStringLiteral("leansip"));
 }
 
-QString BaresipProcess::derivedAccountsPath() const
-{
-    const QString dir = m_derivedDir.isEmpty() ? defaultDerivedDir() : m_derivedDir;
-    return QDir(dir).filePath(QStringLiteral("accounts"));
-}
-
-bool BaresipProcess::ensureUserConfig(const QString &userDir, QString *error, const QString &binary)
-{
-    auto fail = [error](const QString &why) {
-        if (error)
-            *error = why;
-        return false;
-    };
-    if (QFile::exists(QDir(userDir).filePath(QStringLiteral("config"))))
-        return true;
-    if (!QDir().mkpath(userDir))
-        return fail(QStringLiteral("cannot create %1").arg(userDir));
-    QFile::setPermissions(userDir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
-
-    const QString resolved = QStandardPaths::findExecutable(binary);
-    if (resolved.isEmpty())
-        return fail(QStringLiteral("baresip executable '%1' not found in PATH").arg(binary));
-
-    // baresip writes a template config (and accounts/contacts) when the directory has none.
-    // -t 1 makes it exit by itself after a second.
-    qCInfo(lcProcess) << "no config in" << userDir << "- letting baresip create its template";
-    QProcess tmpl;
-    tmpl.setProcessChannelMode(QProcess::ForwardedChannels);
-    tmpl.start(resolved, {QStringLiteral("-f"), userDir, QStringLiteral("-t"), QStringLiteral("1")});
-    if (!tmpl.waitForStarted(3000))
-        return fail(QStringLiteral("cannot run baresip: %1").arg(tmpl.errorString()));
-    if (!tmpl.waitForFinished(8000)) {
-        tmpl.kill();
-        tmpl.waitForFinished(1000);
-    }
-    if (!QFile::exists(QDir(userDir).filePath(QStringLiteral("config"))))
-        return fail(QStringLiteral("baresip did not create %1/config").arg(userDir));
-    return true;
-}
-
-bool BaresipProcess::start(const QString &userDir, const QString &binary)
+bool BaresipProcess::start(const config_deriver::Setup &setup, const QString &binary)
 {
     if (isRunning())
         return true;
-    m_userDir = userDir;
+    m_setup = setup;
+    m_started = true;
     m_binary = binary;
 
     m_port = pickFreePort();
@@ -131,7 +92,7 @@ bool BaresipProcess::start(const QString &userDir, const QString &binary)
         m_error = QStringLiteral("cannot create %1").arg(m_options.recordDir);
         return false;
     }
-    const auto derived = config_deriver::deriveDirectory(userDir, derivedDir, listen, !m_accountsOverride, m_options);
+    const auto derived = config_deriver::writeDirectory(setup, derivedDir, listen, m_options);
     if (!derived.ok) {
         m_error = derived.error;
         return false;
@@ -158,12 +119,12 @@ bool BaresipProcess::start(const QString &userDir, const QString &binary)
 
 bool BaresipProcess::restart()
 {
-    if (m_userDir.isEmpty()) {
+    if (!m_started) {
         m_error = QStringLiteral("baresip was never started");
         return false;
     }
     stop();
-    return start(m_userDir, m_binary);
+    return start(m_setup, m_binary);
 }
 
 void BaresipProcess::stop()

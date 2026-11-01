@@ -47,7 +47,7 @@ public:
     bool backendAvailable() const { return m_backendAvailable; }
     bool hasPendingDial() const { return !m_pendingDial.isEmpty(); }
     // True when the current call was dialled or answered through this controller, as opposed
-    // to one another leansipd client (sipctl, an agent) is handling.
+    // to one another leansipd client (leansipctl, an agent) is handling.
     bool ownsCall() const { return m_ownsCall; }
     QString callId() const { return m_callId; }
     bool isMuted() const { return m_muted; }

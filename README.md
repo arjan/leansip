@@ -1,8 +1,8 @@
 # leansip
 
-A minimal Linux SIP dialer. It does no SIP or audio work itself: it spawns
-[baresip](https://github.com/baresip/baresip) with your existing `~/.baresip`
-configuration and drives it over its `ctrl_tcp` JSON interface.
+A minimal Linux SIP dialer. It does no SIP or audio work itself: it runs
+[baresip](https://github.com/baresip/baresip) with a config generated from one
+`leansip.toml` profile and drives it over its `ctrl_tcp` JSON interface.
 
 ## Usage
 
@@ -11,16 +11,15 @@ leansip                    # open the dialer
 leansip 0612345678         # open and dial immediately
 leansip tel:+31201234567   # tel: and sip: URIs are accepted
 leansip --connect 127.0.0.1:4444   # attach to a baresip you started yourself
-leansip --baresip-dir ~/other-baresip
+leansip -p work                    # another profile from leansip.toml
 leansip --record                   # record calls (when this window starts leansipd)
 ```
 
-One instance runs per baresip directory. A second invocation for the same directory
-hands its number (or just a "raise" request) to the open window and exits, so `leansip %u`
-works as a `tel:` URL handler. `leansip --baresip-dir ~/.baresip2` opens a separate dialer
-for a second account next to the default one; each gets its own derived config under
-`$XDG_RUNTIME_DIR` and baresip picks random SIP ports, as long as neither config pins
-`sip_listen`.
+One instance runs per profile. A second invocation for the same profile hands its number
+(or just a "raise" request) to the open window and exits, so `leansip %u` works as a `tel:`
+URL handler. `leansip -p work` opens a separate dialer for that profile next to the default
+one; each gets its own baresip and runtime directory under `$XDG_RUNTIME_DIR`, and baresip
+picks random SIP ports unless the profile sets `sip_listen`.
 
 On Wayland a window may only take focus with an activation token, which the
 launcher passes to the *new* process as `XDG_ACTIVATION_TOKEN`. leansip forwards
@@ -29,7 +28,49 @@ file or `gio open tel:…` bring the dialer to the front. A plain terminal launc
 carries no token; the compositor then flags the window ("leansip is ready")
 instead of focusing it.
 
-The UI shows the **first** account from `~/.baresip/accounts`.
+## Configuration
+
+All profiles live in `~/.config/leansip/leansip.toml` (or `$LEANSIP_CONFIG`, or `--config`).
+A profile is one SIP account. The file can hold passwords, so leansip refuses to read it unless
+it belongs to you and is not readable by anyone else (`chmod 600`).
+
+```toml
+default_profile = "desk"           # used without --profile (and without $LEANSIP_PROFILE)
+
+[baresip]                          # baresip config settings for every profile
+audio_player = "pulse,"
+audio_source = "pulse,"
+
+[profiles.desk]
+display_name = "Desk"              # optional; shown in the dialer
+aor = "sip:phone1@pbx.example.com" # sip:user@domain[:port], or sips:
+transport = "udp"                  # optional: udp, tcp or tls
+auth_user = "phone1"               # optional; defaults to the user part
+password_cmd = "rbw get sip-desk"  # or: password = "..."
+outbound = "sip:127.0.0.1:5060"    # optional outbound proxy
+account_params = { audio_codecs = "opus/48000/2,PCMA/8000/1", regint = 600 }
+uuid = "..."                       # optional; keeps baresip's instance id stable
+record = false                     # record every call (like --record)
+record_dir = "~/leansip-calls"     # optional; default <runtime dir>/recordings
+confirm_dial = false               # true: `leansipctl dial` needs --yes (for real trunks)
+
+[profiles.desk.baresip]            # this profile only; wins over [baresip]
+jitter_buffer_delay = "5-10"
+module_app = ["account.so", "contact.so", "debug_cmd.so", "menu.so", "netroam.so"]
+```
+
+- **baresip settings** start from a built-in template: audio over ALSA at 48 kHz, opus, G.722
+  and G.711, STUN/TURN/ICE. A key replaces every template line with that name, a list gives one
+  line per element, and an empty list (`opus_bitrate = []`) removes the setting. `true`/`false`
+  become `yes`/`no`. So `module = [...]` replaces the whole module list, while
+  `module_app = [...]` leaves `module` alone.
+- **password_cmd** runs with `/bin/sh -c` each time leansipd starts baresip. The first line it
+  prints is the password; a failing command stops the start. It may take up to a minute, for
+  instance while a password manager asks to be unlocked.
+- Unknown keys are errors, so a typo never silently drops a setting.
+- Edits apply the next time leansipd starts baresip: close the dialer (or `leansipctl stop`), or
+  run `leansipctl raw leansipd_restart`, which reloads the profile and keeps the old baresip running
+  if the file has an error. `--record` and `record_dir` only change with a new daemon.
 
 ## Keys
 
@@ -46,33 +87,12 @@ one shown, e.g. an agent's).
 | `↑`          | recall the last number dialled                           |
 | `m`          | mute · unmute the microphone during a call               |
 | `?` / `F1`   | help screen (`Esc` closes it)                            |
-| `F2`         | accounts screen (see below)                              |
 | `Ctrl+Q`     | quit                                                     |
-
-### Accounts screen (F2)
-
-Edits `~/.baresip/accounts`. The list is the file order and the **first entry is the
-account the dialer uses**, so switching accounts is just moving one to the top.
-
-| Key              | Action                                                        |
-|------------------|---------------------------------------------------------------|
-| `↑` `↓`          | select an account; the form below edits it                    |
-| `Enter`          | make the selected account active (moves it to the top)        |
-| `Ctrl+↑` `Ctrl+↓`| move the selected account                                     |
-| `Ctrl+N` / `Del` | add / remove an account                                       |
-| `Ctrl+H`         | show or hide the password                                     |
-| `Ctrl+S`         | save: the edited file is handed to a restarted baresip and the active account must actually register; only then is `~/.baresip/accounts` rewritten |
-| `Esc`            | abort a running validation, or close discarding changes       |
-
-Fields: display name, user, domain, transport, auth user, password, outbound proxy. Anything
-else already on an account line (codecs, `regint`, …) is kept verbatim. The screen opens by
-itself when there is no account yet. Saving is refused during a call, because validation
-restarts baresip.
 
 ## How it talks to baresip
 
 The dialer does not run baresip itself. `leansipd`, a small daemon, owns one baresip per
-baresip directory and shares it: the dialer is one client, `sipctl` (below) and anything
+profile and shares it: the dialer is one client, `leansipctl` (below) and anything
 else are others. All clients see the same calls and events, so an agent can watch or drive
 a call you are on, and you can hang up a call an agent placed.
 
@@ -81,34 +101,36 @@ a call you are on, and you can hang up a call an agent placed.
   selects its own call and account by id for every command, since baresip's "current call"
   is shared with the other clients.
   That daemon stops (and with it baresip, unregistering) when the dialer closes or crashes,
-  even if sipctl clients are still connected.
-- A daemon started by `sipctl start` keeps running until `sipctl stop`; a dialer that
+  even if leansipctl clients are still connected.
+- A daemon started by `leansipctl start` keeps running until `leansipctl stop`; a dialer that
   attaches to it leaves it running when it closes, and hangs up only a call it dialled or
   answered itself.
-- Clients use `$XDG_RUNTIME_DIR/leansip[-<hash>]/leansipd.sock`, a Unix socket in a 0700
+- Clients use `$XDG_RUNTIME_DIR/leansip-<profile>/leansipd.sock`, a Unix socket in a 0700
   directory. They speak baresip's own `ctrl_tcp` protocol (netstring-framed JSON); the
   daemon routes each response back to the client that asked, broadcasts every event with a
   running `"seq"` and a `"ts"`, and keeps the last 2000 events for clients that connect later.
   It refuses `quit` and adds its own commands: `leansipd_seq` (several commands back to
   back, e.g. `callfind` + `hangup`), `leansipd_play`, `leansipd_recordings`,
-  `leansipd_status`, `leansipd_events <since>`, `leansipd_restart [override]`,
+  `leansipd_status`, `leansipd_events <since>`, `leansipd_restart` (reloads the profile),
   `leansipd_hello ui`, `leansipd_bind` and `leansipd_shutdown`.
 - The daemon's output, and baresip's, goes to `leansipd.log` in the same directory
   (rotated at 5 MB). It restarts baresip if baresip crashes.
 
-leansip never edits `~/.baresip`. leansipd writes a derived config to that runtime directory:
+leansipd writes baresip's config directory into that runtime directory:
 
-- your `config` with the console UI modules (`stdio`, `cons`, `gtk`) removed,
+- `config`: the template with the profile's settings, minus console UI modules (`stdio`,
+  `cons`, `gtk`) and plus the modules leansip needs (`account`, `menu`, `debug_cmd`, `aufile`),
 - `ctrl_tcp` enabled on `127.0.0.1:<random port>` (never `0.0.0.0`),
 - `audio_path` pointed at a private `sounds/` directory holding baresip's stock WAVs
   (symlinked) plus generated tones: 16 DTMF digits, played via `debug_cmd`'s `play`
   command whenever you send one, and an "invalid number" tone (the ITU special information
   tone) written as `error.wav`/`notfound.wav` so baresip's own failed-call handling and
   leansip's local rejections sound the same,
-- symlinks to your `accounts`, `contacts` and `uuid` so credentials stay in one place.
+- `accounts`: the profile's account line, with the password (mode 0600, removed when
+  leansipd exits), and `uuid` when the profile sets one.
 
-It then runs `baresip -f <that dir>` and stops it on exit. Your password is never
-read by leansip; the accounts parser only extracts the display name and SIP address.
+It then runs `baresip -f <that dir>` and stops it on exit. The password is never logged or
+shown by leansip, leansipctl or the dialer.
 
 Stop any baresip you already have running first, otherwise two user agents
 register the same account.
@@ -120,28 +142,28 @@ calls on your accounts. baresip's own `ctrl_tcp` interface, which leansipd uses,
 authentication; binding it to loopback keeps it off the network, but any local user can
 connect to it. This is the same trust level as the baresip console modules.
 
-## sipctl: scripting and agents
+## leansipctl: scripting and agents
 
-`sipctl` talks to leansipd and prints one JSON object per line. `-d DIR` picks the baresip
-directory (account).
+`leansipctl` talks to leansipd and prints one JSON object per line. `-p NAME` picks the profile;
+`leansipctl profiles` lists them.
 
 ```
-sipctl start --record                # also --sip-trace, --max-call-seconds
-r=$(sipctl dial 940)                 # {"ok":true,"seq":12,"call":"…","data":"call id: …"}
-sipctl wait CALL_ESTABLISHED,CALL_CLOSED --since "$(echo "$r" | jq .seq)" --timeout 20
-sipctl listen                        # transcript of what the far end says next
-sipctl say "I'd like to speak to support" --wait
-sipctl dtmf 1#
-sipctl analyze                       # timing, codec, RTCP, levels, warnings
-sipctl hangup
-sipctl stop
+leansipctl start --record                # also --sip-trace, --max-call-seconds
+r=$(leansipctl dial 940)                 # {"ok":true,"seq":12,"call":"…","data":"call id: …"}
+leansipctl wait CALL_ESTABLISHED,CALL_CLOSED --since "$(echo "$r" | jq .seq)" --timeout 20
+leansipctl listen                        # transcript of what the far end says next
+leansipctl say "I'd like to speak to support" --wait
+leansipctl dtmf 1#
+leansipctl analyze                       # timing, codec, RTCP, levels, warnings
+leansipctl hangup
+leansipctl stop
 ```
 
-Speech (`say`, `listen`, `transcribe`) uses ElevenLabs and needs `ELEVENLABS_API_KEY`. sipctl
+Speech (`say`, `listen`, `transcribe`) uses ElevenLabs and needs `ELEVENLABS_API_KEY`. leansipctl
 hangs up its own calls after 10 minutes by default; the dialer's calls have no limit.
 
-`sipctl help` lists the commands, `sipctl help <command>` explains one. The full reference is
-[docs/sipctl.md](docs/sipctl.md).
+`leansipctl help` lists the commands, `leansipctl help <command>` explains one. The full reference is
+[docs/leansipctl.md](docs/leansipctl.md).
 
 ## Build (Ubuntu)
 
@@ -150,15 +172,14 @@ Tested on Ubuntu 26.04 (Qt 6.10, baresip 1.1.0). Needs Qt 6.4+ and CMake 3.22+;
 modules used at runtime.
 
 ```
-sudo apt install build-essential cmake ninja-build qt6-base-dev baresip-core
+sudo apt install build-essential cmake ninja-build qt6-base-dev libtomlplusplus-dev baresip-core
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
 ./build/src/leansip            # finds ./build/src/leansipd next to it
 ```
 
-On a machine without `~/.baresip`, leansip lets baresip write its template config on
-first start and then opens the accounts screen so you can enter your SIP account. To
+Write `~/.config/leansip/leansip.toml` (see Configuration) before the first start. To
 install system-wide:
 
 ```
@@ -167,13 +188,13 @@ sudo cmake --install build
 
 ## Layout
 
-- `src/core/` — Qt Core/Network only, unit-tested: netstring framing, accounts
-  parser, config derivation, ctrl_tcp client, call state machine, single-instance,
+- `src/core/` — Qt Core/Network only, unit-tested: netstring framing, `leansip.toml`
+  (`settings`), the account line, config derivation, ctrl_tcp client, call state machine, single-instance,
   the leansipd proxy (`ctrl_proxy`) and its client/launcher (`daemon_client`), WAV
   handling and speech detection, stream format and recordings (`media_control`), call
   analysis, the ElevenLabs client.
 - `src/ui/` — the dialer widget.
-- `src/daemon/` — `leansipd`; `src/sipctl/` — `sipctl`.
+- `src/daemon/` — `leansipd`; `src/leansipctl/` — `leansipctl`.
 - `tests/` — one QtTest executable per unit, run with the offscreen platform, plus
   `integration_loopback.sh`: two daemons and a real baresip calling each other on 127.0.0.1,
   with a fake ElevenLabs server (`fake_elevenlabs.py`). `LEANSIP_SCREENSHOT_DIR=<dir>

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QList>
 #include <QString>
 #include <QStringList>
 #include <optional>
@@ -20,8 +19,8 @@ struct AccountInfo {
     QString label() const { return displayName.isEmpty() ? aor : displayName; }
 };
 
-// A full, editable account line. Fields we don't model are kept verbatim in `extraParams`
-// so rewriting a line never loses codec lists, regint, medianat, ...
+// A full account line. Fields we don't model are kept verbatim in `extraParams`
+// (codec lists, regint, medianat, ...).
 struct AccountRecord {
     QString scheme = QStringLiteral("sip"); // "sip" or "sips"
     QString displayName;
@@ -42,39 +41,11 @@ struct AccountRecord {
     bool operator==(const AccountRecord &) const = default;
 };
 
-// Whole accounts file: comments/blank lines before the first account are kept; comments between
-// accounts are dropped on rewrite so that reordering stays well defined.
-struct AccountsFile {
-    QStringList preamble;
-    QList<AccountRecord> accounts;
-
-    bool operator==(const AccountsFile &) const = default;
-};
-
 namespace accounts {
 
 // Parses one account line of baresip's `accounts` file, e.g.
 //   "Alice" <sip:alice@example.com;transport=udp>;auth_user=alice;auth_pass=secret
 std::optional<AccountInfo> parseLine(const QString &line);
-
-// Returns the first non-comment, non-empty account in the file contents.
-std::optional<AccountInfo> parseFirst(const QString &contents);
-
-// Reads `path` and returns the first account, or an error message.
-struct LoadResult {
-    std::optional<AccountInfo> account;
-    QString error;
-};
-LoadResult loadFirst(const QString &path);
-
-AccountsFile parseFile(const QString &contents);
-QString serialize(const AccountsFile &file);
-
-// Reads the whole file; a missing file yields an empty AccountsFile (not an error).
-bool readFile(const QString &path, AccountsFile *out, QString *error);
-
-// Atomic replace: writes `<path>.tmp` with mode 0600, fsyncs, renames over `path`.
-bool writeFile(const QString &path, const AccountsFile &file, QString *error);
 
 // Checks a record can be serialised unambiguously (non-empty user/domain, no characters that
 // would break the line grammar, known transport). `error` gets a human-readable reason.

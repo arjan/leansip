@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # End to end with a real baresip: two leansipd daemons (alice, bob) call each other on
 # 127.0.0.1 with accounts that never register, and no sound card (aufile sources and players).
-# Covers dial/answer, stream format, say -> listen, DTMF, analyze, hangup by
-# call id, and stop/start reusing the same SIP port.
+# Covers profiles from leansip.toml (password_cmd, confirm_dial, reload on restart),
+# dial/answer, stream format, say -> listen, DTMF, analyze, hangup by call id, and stop/start
+# reusing the same SIP port.
 #
-#   integration_loopback.sh <dir with sipctl and leansipd>
+#   integration_loopback.sh <dir with leansipctl and leansipd>
 #
 # Speech goes to a local fake ElevenLabs server. With LEANSIP_E2E_REAL_ELEVENLABS=1 and
 # ELEVENLABS_API_KEY in the environment it uses the real service instead, e.g.
@@ -20,8 +21,8 @@ command -v baresip >/dev/null || { echo "baresip not installed: skipping"; exit 
 T=$(mktemp -d)
 SERVER_PID=
 cleanup() {
-    "$BIN/sipctl" -d "$T/alice" stop >/dev/null 2>&1 || true
-    "$BIN/sipctl" -d "$T/bob" stop >/dev/null 2>&1 || true
+    "$BIN/leansipctl" -p alice stop >/dev/null 2>&1 || true
+    "$BIN/leansipctl" -p bob stop >/dev/null 2>&1 || true
     [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
     if [ -n "${LEANSIP_E2E_KEEP:-}" ]; then echo "kept $T"; else rm -rf "$T"; fi
 }
@@ -38,21 +39,35 @@ w = wave.open(sys.argv[1], "wb"); w.setnchannels(1); w.setsampwidth(2); w.setfra
 w.writeframes(b"\0\0" * 8000 * 300); w.close()
 EOF
 
-profile() { # name port source
-    mkdir -p "$T/$1"
-    cat >"$T/$1/config" <<EOF
-module_path		/usr/lib/baresip/modules
-sip_listen		127.0.0.1:$2
-module			g711.so
-module			aufile.so
-audio_player		aufile,$T/$1/heard.wav
-audio_source		$3
+# No sound card and no codecs beyond PCMU: the built-in baresip config, trimmed. aufile does not
+# resample, so sources and players run at the codec's 8 kHz (ausine only does 48 kHz).
+export LEANSIP_CONFIG="$T/leansip.toml"
+unset LEANSIP_PROFILE
+profile() { # name port extra-profile-line
+    cat <<EOF
+
+[profiles.$1]
+aor = "sip:$1@127.0.0.1"
+account_params = { regint = 0 }
+$3
+
+[profiles.$1.baresip]
+sip_listen = "127.0.0.1:$2"
+module = ["g711.so", "aufile.so"]
+audio_player = "aufile,$T/$1-heard.wav"
+audio_source = "aufile,$T/silence.wav"
+audio_alert = []
+ausrc_srate = []
+auplay_srate = []
 EOF
-    printf '<sip:%s@127.0.0.1>;regint=0\n' "$1" >"$T/$1/accounts"
-    chmod 600 "$T/$1/accounts"
 }
-profile alice "$PORT" "aufile,$T/silence.wav"
-profile bob $((PORT + 1)) "aufile,$T/silence.wav" # ausine only does 48 kHz; PCMU is 8 kHz
+{
+    echo 'default_profile = "alice"'
+    # baresip never needs alice's password here; this exercises the password_cmd path.
+    profile alice "$PORT" 'password_cmd = "echo pw-alice"'
+    profile bob $((PORT + 1)) 'confirm_dial = true'
+} >"$LEANSIP_CONFIG"
+chmod 600 "$LEANSIP_CONFIG"
 
 if [ "${LEANSIP_E2E_REAL_ELEVENLABS:-}" = 1 ]; then
     [ -n "${ELEVENLABS_API_KEY:-}" ] || { echo "LEANSIP_E2E_REAL_ELEVENLABS=1 needs ELEVENLABS_API_KEY"; exit 1; }
@@ -66,8 +81,8 @@ else
     echo "speech: fake ElevenLabs on port $FAKE_PORT"
 fi
 
-a() { "$BIN/sipctl" -d "$T/alice" "$@"; }
-b() { "$BIN/sipctl" -d "$T/bob" "$@"; }
+a() { "$BIN/leansipctl" "$@"; } # alice is the default profile
+b() { "$BIN/leansipctl" -p bob "$@"; }
 step() { echo "--- $*"; }
 fail() {
     echo "FAIL: $*"
@@ -81,9 +96,24 @@ expect() { # description, jq filter, json
     echo "$3" | jq -e "$2" >/dev/null || fail "$1: $3"
 }
 
+step profiles
+out=$("$BIN/leansipctl" profiles)
+expect "profiles" '.ok and .default == "alice" and ([.profiles[].name] == ["alice", "bob"]) and (.profiles | all(.running | not))' "$out"
+case "$out" in *pw-alice*) fail "profiles shows the password" ;; esac
+
 step start both daemons
 expect "alice start" '.ok and .status.baresipUp and .status.recording' "$(a start --record)"
 expect "bob start" '.ok and .status.baresipUp and .status.recording' "$(b start --record --max-call-seconds 60)"
+
+step confirm_dial
+set +e
+out=$(b dial "sip:alice@127.0.0.1:$PORT")
+code=$?
+set -e
+[ "$code" = 2 ] || fail "dial on a confirm_dial profile without --yes: exit $code, $out"
+expect "confirm hint" '.error | test("--yes")' "$out"
+out=$(b raw dial "sip:alice@127.0.0.1:$PORT") && fail "raw dial without --yes: $out"
+expect "no call was placed" '.data | test("ESTABLISHED|OUTGOING|RINGING") | not' "$(b calls)"
 
 step call bob
 out=$(a dial "sip:bob@127.0.0.1:$((PORT + 1))")
@@ -127,11 +157,22 @@ expect "analyze bob" '.ok and .dtmfReceived == "1#" and .state == "closed" and .
 out=$(a analyze)
 expect "analyze alice" '.ok and .id == "'"$CALL"'" and .audio.codec == "PCMU" and (.timing.answeredAfterMs >= 0)' "$out"
 
-step restart baresip through the daemon, as the account editor does
+step "edit leansip.toml, restart: the daemon reloads the profile"
+expect "status before" '.data.aor == "sip:alice@127.0.0.1"' "$(a status)"
+sed -i 's/^aor = "sip:alice@127.0.0.1"$/aor = "sip:alice2@127.0.0.1"/' "$LEANSIP_CONFIG"
 seq=$(a status | jq -r .data.seq)
 expect "restart" '.ok' "$(a raw leansipd_restart)"
 expect "back up" '.type == "BACKEND_UP"' "$(a wait BACKEND_UP --since "$seq" --timeout 10)"
-expect "accounts after restart" '.data | test("alice@127.0.0.1")' "$(a reginfo)"
+expect "accounts after restart" '.data | test("alice2@127.0.0.1")' "$(a reginfo)"
+expect "status after" '.data.aor == "sip:alice2@127.0.0.1"' "$(a status)"
+cp -p "$LEANSIP_CONFIG" "$T/good.toml"
+sed -i '1i colour = "red"' "$LEANSIP_CONFIG" # top level: an unknown key
+expect "leansipctl refuses a broken file" '(.ok | not) and (.error | test("colour: unknown key"))' "$(a status || true)"
+# The daemon reloads its own file; this client reads the good copy to get the command through.
+expect "the daemon refuses it too" '(.ok | not) and (.data | test("colour"))' \
+    "$(a --config "$T/good.toml" raw leansipd_restart || true)"
+expect "and baresip keeps running" '.data.baresipUp' "$(a --config "$T/good.toml" status)"
+sed -i '/^colour = /d' "$LEANSIP_CONFIG"
 
 step stop and start again on the same port
 expect "stop" '.ok' "$(a stop)"

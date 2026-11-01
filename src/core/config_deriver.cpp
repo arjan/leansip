@@ -4,7 +4,6 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QStringList>
-#include <QTextStream>
 
 namespace leansip::config_deriver {
 
@@ -113,52 +112,41 @@ QString deriveConfigText(const QString &userConfig, const QString &listen, const
     return out.join(u'\n');
 }
 
-Result deriveDirectory(const QString &userDir, const QString &targetDir, const QString &listen, bool linkAccounts,
-                       const Options &options)
+Result writeDirectory(const Setup &setup, const QString &targetDir, const QString &listen, const Options &options)
 {
-    const QDir user(userDir);
-    if (!user.exists())
-        return {false, {}, {}, QStringLiteral("baresip directory %1 does not exist").arg(userDir)};
-
-    QFile userConfig(user.filePath(QStringLiteral("config")));
-    if (!userConfig.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return {false, {}, {},
-                QStringLiteral("cannot read %1 (run baresip once to create it): %2")
-                    .arg(userConfig.fileName(), userConfig.errorString())};
-    }
-    const QString text = QTextStream(&userConfig).readAll();
-
-    QDir target(targetDir);
+    auto fail = [](const QString &why) { return Result{false, {}, {}, why}; };
+    const QDir target(targetDir);
     const QString soundsDir = target.filePath(QStringLiteral("sounds"));
     if (!QDir().mkpath(soundsDir))
-        return {false, {}, {}, QStringLiteral("cannot create %1").arg(soundsDir)};
+        return fail(QStringLiteral("cannot create %1").arg(soundsDir));
     QFile::setPermissions(targetDir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
 
-    QFile derived(target.filePath(QStringLiteral("config")));
-    if (!derived.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
-        return {false, {}, {}, QStringLiteral("cannot write %1: %2").arg(derived.fileName(), derived.errorString())};
-    QTextStream(&derived) << deriveConfigText(text, listen, soundsDir, options);
-    derived.close();
-
-    // Symlink (never copy) the files holding credentials and identity.
-    for (const char *name : {"accounts", "contacts", "uuid"}) {
-        const QString src = user.filePath(QLatin1String(name));
-        const QString dst = target.filePath(QLatin1String(name));
-        if (!QFile::exists(src))
-            continue;
-        if (!linkAccounts && QLatin1String(name) == QLatin1String("accounts"))
-            continue; // a candidate accounts file is in place; keep it
-        if (!linkInto(src, dst))
-            return {false, {}, {}, QStringLiteral("cannot link %1 -> %2").arg(dst, src)};
-    }
+    auto write = [&](const QString &name, const QString &text) {
+        // Never write through a link left behind (an older layout linked the user's own files).
+        QFile::remove(target.filePath(name));
+        QFile f(target.filePath(name));
+        // Private before the first byte goes in: the accounts file holds the password.
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)
+            || !f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner) || f.write(text.toUtf8()) < 0) {
+            return QStringLiteral("cannot write %1: %2").arg(f.fileName(), f.errorString());
+        }
+        return QString();
+    };
+    QString error = write(QStringLiteral("config"), deriveConfigText(setup.config, listen, soundsDir, options));
+    if (error.isEmpty())
+        error = write(QStringLiteral("accounts"), setup.accountLine + u'\n');
+    if (error.isEmpty() && !setup.uuid.isEmpty())
+        error = write(QStringLiteral("uuid"), setup.uuid + u'\n');
+    if (!error.isEmpty())
+        return fail(error);
 
     // baresip resolves every sound (ring, ringback, our tones) against one audio_path, so the
     // stock files must appear in ours too.
-    const QDir stock(userAudioPath(text));
+    const QDir stock(userAudioPath(setup.config));
     const QStringList wavs = stock.entryList({QStringLiteral("*.wav")}, QDir::Files);
     for (const QString &wav : wavs) {
         if (!linkInto(stock.filePath(wav), QDir(soundsDir).filePath(wav)))
-            return {false, {}, {}, QStringLiteral("cannot link sound %1").arg(wav)};
+            return fail(QStringLiteral("cannot link sound %1").arg(wav));
     }
 
     Result result;

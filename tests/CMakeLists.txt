@@ -8,12 +8,12 @@ function(leansip_add_test name)
     target_link_libraries(${name} PRIVATE leansip_core Qt6::Test leansip_warnings ${ARG_LIBS})
     add_test(NAME ${name} COMMAND ${name})
     set_tests_properties(${name} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LEANSIP_FIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endfunction()
 
 leansip_add_test(tst_netstring)
 leansip_add_test(tst_accounts_parser)
-leansip_add_test(tst_account_validator)
+leansip_add_test(tst_settings)
 leansip_add_test(tst_config_deriver)
 leansip_add_test(tst_dtmf_tone)
 leansip_add_test(tst_baresip_event)
@@ -26,9 +26,8 @@ leansip_add_test(tst_media)
 leansip_add_test(tst_elevenlabs)
 leansip_add_test(tst_unix_signals)
 leansip_add_test(tst_main_window LIBS leansip_ui)
-leansip_add_test(tst_accounts_dialog LIBS leansip_ui)
 
 # End to end with a real baresip on the loopback interface; skipped (77) without baresip.
 add_test(NAME integration_loopback
-         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration_loopback.sh $<TARGET_FILE_DIR:sipctl>)
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration_loopback.sh $<TARGET_FILE_DIR:leansipctl>)
 set_tests_properties(integration_loopback PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 180)

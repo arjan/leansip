@@ -69,83 +69,71 @@ private slots:
         QCOMPARE(config_deriver::userAudioPath("x 1\naudio_path   /opt/snd  # mine\n"), "/opt/snd");
     }
 
-    void deriveDirectoryWritesConfigLinksAndSounds()
+    void writeDirectoryWritesConfigAccountAndSounds()
     {
-        QTemporaryDir user;
         QTemporaryDir target;
         QTemporaryDir stock;
-        QVERIFY(user.isValid() && target.isValid() && stock.isValid());
+        QVERIFY(target.isValid() && stock.isValid());
         writeFile(stock.filePath("ring.wav"), "RIFF");
         writeFile(stock.filePath("notes.txt"), "not a sound");
-        writeFile(user.filePath("config"), QStringLiteral("module\t\t\tstdio.so\nmodule_app\t\tmenu.so\naudio_path\t\t%1\n").arg(stock.path()).toUtf8());
-        writeFile(user.filePath("accounts"), "<sip:a@b>;auth_pass=secret\n");
-        writeFile(user.filePath("uuid"), "1234\n");
+        config_deriver::Setup setup;
+        setup.config = QStringLiteral("module\t\t\tstdio.so\nmodule_app\t\tmenu.so\naudio_path\t\t%1\n").arg(stock.path());
+        setup.accountLine = QStringLiteral("<sip:a@b>;auth_pass=secret");
+        setup.uuid = QStringLiteral("1234-abcd");
 
         const QString dir = target.filePath("derived");
-        const auto r = config_deriver::deriveDirectory(user.path(), dir, QStringLiteral("127.0.0.1:5"));
+        const auto r = config_deriver::writeDirectory(setup, dir, QStringLiteral("127.0.0.1:5"));
         QVERIFY2(r.ok, qPrintable(r.error));
         QCOMPARE(r.dir, dir);
         QCOMPARE(r.soundsDir, dir + "/sounds");
 
-        QFile cfg(dir + "/config");
-        QVERIFY(cfg.open(QIODevice::ReadOnly));
-        const QString text = QString::fromUtf8(cfg.readAll());
+        const QString text = readFile(dir + "/config");
         QVERIFY(!text.contains("stdio.so"));
         QVERIFY(text.contains("127.0.0.1:5"));
         QVERIFY(text.contains("audio_path\t\t" + dir + "/sounds"));
+        QCOMPARE(readFile(dir + "/accounts"), "<sip:a@b>;auth_pass=secret\n");
+        QCOMPARE(readFile(dir + "/uuid"), "1234-abcd\n");
 
-        QFileInfo accounts(dir + "/accounts");
-        QVERIFY(accounts.isSymLink());
-        QCOMPARE(accounts.symLinkTarget(), QFileInfo(user.filePath("accounts")).canonicalFilePath());
-        QVERIFY(QFileInfo(dir + "/uuid").isSymLink());
-        QVERIFY(!QFileInfo::exists(dir + "/contacts")); // absent in source: not linked
+        // The password is only ever readable by us.
+        QCOMPARE(QFileInfo(dir + "/accounts").permissions() & 0x0077, QFileDevice::Permissions());
+        const auto perms = QFileInfo(dir).permissions();
+        QVERIFY(!(perms & QFileDevice::ReadGroup));
+        QVERIFY(!(perms & QFileDevice::ReadOther));
 
         // Stock sounds are linked into our audio_path; non-WAV files are not.
         QVERIFY(QFileInfo(dir + "/sounds/ring.wav").isSymLink());
         QVERIFY(!QFileInfo::exists(dir + "/sounds/notes.txt"));
 
-        const auto perms = QFileInfo(dir).permissions();
-        QVERIFY(!(perms & QFileDevice::ReadGroup));
-        QVERIFY(!(perms & QFileDevice::ReadOther));
-
-        // Re-deriving must replace the existing links rather than fail.
-        const auto again = config_deriver::deriveDirectory(user.path(), dir, QStringLiteral("127.0.0.1:6"));
-        QVERIFY2(again.ok, qPrintable(again.error));
-
-        // A candidate accounts file (validation in progress) must survive a re-derive when asked.
+        // Writing again replaces everything, and never writes through a link that is in the way.
+        QTemporaryDir elsewhere;
+        const QString victim = elsewhere.filePath("victim");
+        writeFile(victim, "keep me");
         QFile::remove(dir + "/accounts");
-        writeFile(dir + "/accounts", "<sip:candidate@x>;auth_pass=c\n");
-        const auto keep = config_deriver::deriveDirectory(user.path(), dir, QStringLiteral("127.0.0.1:7"), false);
-        QVERIFY2(keep.ok, qPrintable(keep.error));
+        QVERIFY(QFile::link(victim, dir + "/accounts"));
+        setup.accountLine = QStringLiteral("<sip:c@d>");
+        setup.uuid.clear();
+        const auto again = config_deriver::writeDirectory(setup, dir, QStringLiteral("127.0.0.1:6"));
+        QVERIFY2(again.ok, qPrintable(again.error));
         QVERIFY(!QFileInfo(dir + "/accounts").isSymLink());
-        QFile cand(dir + "/accounts");
-        QVERIFY(cand.open(QIODevice::ReadOnly));
-        QVERIFY(cand.readAll().contains("candidate@x"));
-        QVERIFY(QFileInfo(dir + "/uuid").isSymLink()); // other links still refreshed
-
-        // ...and is replaced by the link again once the override is lifted.
-        const auto relink = config_deriver::deriveDirectory(user.path(), dir, QStringLiteral("127.0.0.1:8"), true);
-        QVERIFY2(relink.ok, qPrintable(relink.error));
-        QVERIFY(QFileInfo(dir + "/accounts").isSymLink());
+        QCOMPARE(readFile(dir + "/accounts"), "<sip:c@d>\n");
+        QCOMPARE(readFile(victim), "keep me");
+        QVERIFY(readFile(dir + "/config").contains("127.0.0.1:6"));
     }
 
-    void deriveDirectoryFailsWithoutUserConfig()
+    void writeDirectoryFailsWhereItCannotWrite()
     {
-        QTemporaryDir user;
-        QTemporaryDir target;
-        const auto r = config_deriver::deriveDirectory(user.path(), target.path(), QStringLiteral("127.0.0.1:7"));
+        const auto r = config_deriver::writeDirectory({}, "/proc/leansip/x", QStringLiteral("127.0.0.1:8"));
         QVERIFY(!r.ok);
-        QVERIFY(r.error.contains("run baresip once"));
-    }
-
-    void deriveDirectoryFailsWithoutUserDir()
-    {
-        QTemporaryDir target;
-        const auto r = config_deriver::deriveDirectory("/nonexistent/leansip", target.path(), QStringLiteral("127.0.0.1:8"));
-        QVERIFY(!r.ok);
+        QVERIFY(!r.error.isEmpty());
     }
 
 private:
+    static QString readFile(const QString &path)
+    {
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()) : QString();
+    }
+
     static void writeFile(const QString &path, const QByteArray &data)
     {
         QFile f(path);

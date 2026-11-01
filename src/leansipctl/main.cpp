@@ -1,13 +1,13 @@
-// sipctl: command-line client for leansipd, meant for scripts and coding agents.
+// leansipctl: command-line client for leansipd, meant for scripts and coding agents.
 // Every command prints one JSON object per line; exit codes: 0 ok, 1 failed or timed out,
 // 2 usage error, 3 leansipd not running.
 
-#include "core/accounts_parser.h"
 #include "core/call_analysis.h"
 #include "core/call_controller.h"
 #include "core/daemon_client.h"
 #include "core/elevenlabs.h"
 #include "core/profile.h"
+#include "core/settings.h"
 #include "core/speech_segmenter.h"
 #include "core/wav.h"
 
@@ -42,50 +42,58 @@ struct CommandHelp {
     const char *details;
 };
 
-// Single source for `sipctl help`, `sipctl help <command>` and `sipctl <command> --help`.
+// Single source for `leansipctl help`, `leansipctl help <command>` and `leansipctl <command> --help`.
 const CommandHelp kCommands[] = {
     {"status", "status", "daemon state; exit 3 when not running",
      R"(Prints the daemon's state as JSON in "data":
-  baresipDir, runtimeDir, socket, log   where things are
+  profile, aor, config                  which profile of which config file
+  confirmDial                           dial needs --yes (profile setting)
+  runtimeDir, socket, log               where things are
   pid, baresipPid, baresipUp            processes; connected to baresip
-  clients                               connected clients (this sipctl included)
+  clients                               connected clients (this leansipctl included)
   uiOwned, uiAttached                   started by the dialer; dialer still connected
   sipTrace, recording, recordingsDir    options the daemon runs with
-  maxCallSeconds                        limit for calls sipctl places or answers
+  maxCallSeconds                        limit for calls leansipctl places or answers
   playing                               call a clip is playing into, if any
   seq                                   last event number
 Not running: {"ok":true,"running":false,...} and exit code 3.)"},
-    {"start", "start [--sip-trace] [--record] [--max-call-seconds S]", "start leansipd for this account (no-op if running)",
-     R"(Starts leansipd in the background and returns once baresip is reachable (up to 5 s).
-A daemon started here keeps running until `sipctl stop`.
+    {"profiles", "profiles", "list the profiles in leansip.toml and which ones run",
+     R"(Needs no daemon. Prints {"ok":true,"config":<path>,"default":<name>,"profiles":[...]}
+with name, aor, displayName, confirmDial and running for each profile. Passwords never
+appear.)"},
+    {"start", "start [--sip-trace] [--record] [--max-call-seconds S]", "start leansipd for this profile (no-op if running)",
+     R"(Starts leansipd in the background and returns once baresip is reachable (up to 5 s
+after the daemon is up; a password_cmd may make the daemon itself take longer).
+A daemon started here keeps running until `leansipctl stop`.
 
-If the leansip dialer already runs for this account, its daemon is reused. That daemon
+If the leansip dialer already runs for this profile, its daemon is reused. That daemon
 belongs to the dialer and stops when the dialer closes; "status.uiOwned" is then true and
 a "note" says so.
 
 --sip-trace           every SIP message goes to the log ("status.log")
---record              record every call, both directions, as WAV (needed by listen/analyze levels)
---max-call-seconds S  hang up calls sipctl placed or answered after S seconds (default 600, 0 = off)
+--record              record every call, both directions, as WAV (needed by listen/analyze levels);
+                      the profile setting record = true does the same
+--max-call-seconds S  hang up calls leansipctl placed or answered after S seconds (default 600, 0 = off)
 These only take effect when this call starts the daemon; otherwise a "warning" says so.
 
 Output: {"ok":true,"started":<bool>,"status":{...}})"},
     {"stop", "stop", "stop leansipd and its baresip (ends calls, unregisters)",
      R"(Shuts the daemon down and returns once it has exited (up to 10 s), so a following
 `start` can bind the same SIP port. If the dialer is open, it starts a new daemon for itself.)"},
-    {"dial", "dial <number|sip-uri> [--from AOR]", "place a call",
+    {"dial", "dial <number|sip-uri> [--yes]", "place a call",
      R"(Accepts digits, * # +, tel: and sip:/sips: URIs, or user@host[:port]. Anything else
 (spaces, ';', quotes) is rejected before it reaches baresip.
 
---from AOR  dial from another account of this baresip directory (e.g. sip:bob@example.com);
-            the first account is selected again afterwards.
+--yes  required when the profile has confirm_dial = true (a real trunk, say). The same goes
+       for `raw` commands that dial. This guards against mistakes; it is not access control.
 
 Output: {"ok":true,"seq":12,"call":"35fa5b711b6ec554","data":"call id: 35fa5b711b6ec554"}
-Then:   sipctl wait CALL_ESTABLISHED,CALL_CLOSED --call <id> --since 12 --timeout 30
+Then:   leansipctl wait CALL_ESTABLISHED,CALL_CLOSED --call <id> --since 12 --timeout 30
 
 Every dial is a real call on a real account and may cost money.)"},
     {"answer", "answer [--call ID]", "answer a ringing incoming call",
      R"(Sends baresip's `accept`. Wait for the call first:
-  sipctl wait CALL_INCOMING --timeout 60   # prints the event; its "id" is the call)"},
+  leansipctl wait CALL_INCOMING --timeout 60   # prints the event; its "id" is the call)"},
     {"hangup", "hangup [--call ID]", "hang up a call (or reject a ringing one)",
      R"(Without --call: baresip's current call. With several calls, pass --call.)"},
     {"dtmf", "dtmf <digits> [--call ID]", "send DTMF digits in an established call",
@@ -94,7 +102,7 @@ The far end (if it is another leansipd) reports them as CALL_DTMF_START/CALL_DTM
     {"mute", "mute [--call ID]", "toggle the microphone of a call", R"(baresip's `mute`; replies "call muted" or "call un-muted".)"},
     {"hold", "hold [--call ID]", "put a call on hold", R"(baresip's `hold` (a re-INVITE).)"},
     {"resume", "resume [--call ID]", "take a call off hold",
-     R"(baresip 1.1.0 replies "Invalid argument" even when it resumes the call; sipctl reports
+     R"(baresip 1.1.0 replies "Invalid argument" even when it resumes the call; leansipctl reports
 ok when `calls` no longer shows the call on hold.)"},
     {"calls", "calls", "list active calls", R"(baresip's `listcalls` as text in "data". ">" marks baresip's current call.)"},
     {"reginfo", "reginfo", "registration state of the accounts",
@@ -140,9 +148,10 @@ The files live in the runtime directory (cleared at logout); copy what you want 
   levels        with --record: rmsDbfs, peakDbfs, silentPercent per direction
   warnings      e.g. one-way audio, packet loss, never answered)"},
     {"raw", "raw <command> [params...] [--call ID]", "send any baresip ctrl command",
-     R"(For everything sipctl has no wrapper for. Params are joined with spaces; with --call the
+     R"(For everything leansipctl has no wrapper for. Params are joined with spaces; with --call the
 command runs right after selecting that call. `raw help` lists baresip's commands (call
-commands only appear while a call is active). `quit` is refused; use `sipctl stop`.)"},
+commands only appear while a call is active). `quit` is refused; use `leansipctl stop`.
+`raw leansipd_restart` reloads the profile from leansip.toml and restarts baresip.)"},
     {"events", "events [--since N] [--follow] [--call ID] [--account AOR] [--param TEXT]",
      "print journalled events, optionally keep streaming",
      R"(One JSON event per line: every event after sequence number N (default 0: all the daemon
@@ -156,8 +165,8 @@ after S seconds (default 30).
 Without --since only events after `wait` connected count. With --since N, events already
 journalled after N match too. Use the "seq" of the command you are waiting on, so an event
 that fires before `wait` starts is not missed:
-  seq=$(sipctl dial 940 | jq .seq)
-  sipctl wait CALL_ESTABLISHED,CALL_CLOSED --since "$seq" --timeout 30
+  seq=$(leansipctl dial 940 | jq .seq)
+  leansipctl wait CALL_ESTABLISHED,CALL_CLOSED --since "$seq" --timeout 30
 
 Types: CALL_INCOMING CALL_RINGING CALL_PROGRESS CALL_ESTABLISHED CALL_CLOSED CALL_DTMF_START
 CALL_DTMF_END CALL_AUDIO REGISTER_OK REGISTER_FAIL, and leansipd's BACKEND_UP BACKEND_DOWN
@@ -167,26 +176,27 @@ PLAY_STARTED PLAY_ENDED RECORDING_STARTED RECORDING_DONE CALL_LIMIT.)"},
 
 const char *kOverviewTail = R"(
 Global options:
-  -d, --baresip-dir <dir>   which account: the baresip directory (default ~/.baresip).
-                            Each directory has its own daemon.
+  -p, --profile <name>      which profile of leansip.toml (default: $LEANSIP_PROFILE, then
+                            default_profile, then the only one). Each profile has its own daemon.
+  --config <file>           default: $LEANSIP_CONFIG or ~/.config/leansip/leansip.toml
   --call <id>               the call a command is for (ids are in events and dial replies)
-  -h, --help                this help; `sipctl <command> --help` for one command
+  -h, --help                this help; `leansipctl <command> --help` for one command
 
 Output: one JSON object per line on stdout. Replies look like
   {"ok":true,"seq":12,"data":...}
-where "seq" is the event counter when the command arrived (see `sipctl help wait`).
+where "seq" is the event counter when the command arrived (see `leansipctl help wait`).
 Exit codes: 0 ok, 1 failed or timed out, 2 usage error, 3 leansipd not running.
 
 Example:
-  sipctl -d ~/.baresip2 start --record
-  seq=$(sipctl -d ~/.baresip2 dial 940 | jq .seq)
-  sipctl -d ~/.baresip2 wait CALL_ESTABLISHED,CALL_CLOSED --since "$seq"
-  sipctl -d ~/.baresip2 listen                  # what did the bot say?
-  sipctl -d ~/.baresip2 say "I'd like to speak to support" --wait
-  sipctl -d ~/.baresip2 hangup
-  sipctl -d ~/.baresip2 analyze
+  leansipctl -p dev2 start --record
+  seq=$(leansipctl -p dev2 dial 940 | jq .seq)
+  leansipctl -p dev2 wait CALL_ESTABLISHED,CALL_CLOSED --since "$seq"
+  leansipctl -p dev2 listen                  # what did the bot say?
+  leansipctl -p dev2 say "I'd like to speak to support" --wait
+  leansipctl -p dev2 hangup
+  leansipctl -p dev2 analyze
 
-Full reference: docs/sipctl.md in the leansip source tree.)";
+Full reference: docs/leansipctl.md in the leansip source tree.)";
 
 const CommandHelp *findCommand(const QString &name)
 {
@@ -199,8 +209,8 @@ const CommandHelp *findCommand(const QString &name)
 
 QString overview()
 {
-    QString out = QStringLiteral("sipctl: control leansipd, the daemon that shares baresip between the leansip\n"
-                                 "dialer, scripts and agents.\n\nUsage: sipctl [-d DIR] <command> [args] [options]\n\nCommands:\n");
+    QString out = QStringLiteral("leansipctl: control leansipd, the daemon that shares baresip between the leansip\n"
+                                 "dialer, scripts and agents.\n\nUsage: leansipctl [-d DIR] <command> [args] [options]\n\nCommands:\n");
     for (const CommandHelp &c : kCommands) {
         const QString synopsis = QString::fromUtf8(c.synopsis).section(u' ', 0, 1);
         out += QStringLiteral("  %1%2\n").arg(synopsis.leftJustified(24), QString::fromUtf8(c.summary));
@@ -210,7 +220,7 @@ QString overview()
 
 QString commandHelp(const CommandHelp &c)
 {
-    QString out = QStringLiteral("Usage: sipctl [-d DIR] %1\n\n%2.\n").arg(QString::fromUtf8(c.synopsis), QString::fromUtf8(c.summary));
+    QString out = QStringLiteral("Usage: leansipctl [-d DIR] %1\n\n%2.\n").arg(QString::fromUtf8(c.synopsis), QString::fromUtf8(c.summary));
     if (*c.details)
         out += QStringLiteral("\n%1\n").arg(QString::fromUtf8(c.details));
     return out;
@@ -392,9 +402,9 @@ std::optional<QJsonObject> waitFor(Session &s, const EventFilter &filter, qint64
     return std::nullopt;
 }
 
-QString mediaPath(const QString &baresipDir, const QString &stem)
+QString mediaPath(const QString &profileName, const QString &stem)
 {
-    const QString dir = QDir(profile::runtimeDir(baresipDir)).filePath(QStringLiteral("media"));
+    const QString dir = QDir(profile::runtimeDir(profileName)).filePath(QStringLiteral("media"));
     QDir().mkpath(dir);
     return QDir(dir).filePath(QStringLiteral("%1-%2-%3.wav")
                                   .arg(stem)
@@ -411,7 +421,7 @@ std::optional<QJsonObject> transcribeFile(const QString &path, const QString &la
     const auto pcm = wav::readFile(path, error);
     if (!pcm)
         return std::nullopt;
-    const QString upload = QDir(QDir::tempPath()).filePath(QStringLiteral("sipctl-stt-%1.wav").arg(QCoreApplication::applicationPid()));
+    const QString upload = QDir(QDir::tempPath()).filePath(QStringLiteral("leansipctl-stt-%1.wav").arg(QCoreApplication::applicationPid()));
     if (!wav::writeFile(upload, wav::convert(*pcm, 16000, 1), error))
         return std::nullopt;
     const auto t = elevenlabs::transcribe(*config, upload, error, language);
@@ -429,7 +439,7 @@ std::optional<QJsonObject> transcribeFile(const QString &path, const QString &la
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
-    QCoreApplication::setApplicationName(QStringLiteral("sipctl"));
+    QCoreApplication::setApplicationName(QStringLiteral("leansipctl"));
     QCoreApplication::setApplicationVersion(QStringLiteral("0.2.0"));
 
     QCommandLineParser parser;
@@ -438,9 +448,10 @@ int main(int argc, char *argv[])
         return QCommandLineOption(QString::fromLatin1(name), QString::fromLatin1(desc), QString::fromLatin1(value), def);
     };
     const QCommandLineOption helpOpt({QStringLiteral("h"), QStringLiteral("help")}, QStringLiteral("help"));
-    const QCommandLineOption dirOpt({QStringLiteral("d"), QStringLiteral("baresip-dir")},
-                                    QStringLiteral("baresip config directory (selects the account/daemon)"),
-                                    QStringLiteral("dir"), profile::defaultBaresipDir());
+    const QCommandLineOption profileOpt({QStringLiteral("p"), QStringLiteral("profile")},
+                                        QStringLiteral("profile (selects the account/daemon)"), QStringLiteral("name"));
+    const QCommandLineOption configOpt = valueOpt("config", "config file", "file", settings::defaultPath());
+    const QCommandLineOption yesOpt(QStringLiteral("yes"), QStringLiteral("dial on a confirm_dial profile"));
     const QCommandLineOption sinceOpt = valueOpt("since", "event sequence number", "seq");
     const QCommandLineOption timeoutOpt = valueOpt("timeout", "seconds", "s", QStringLiteral("30"));
     const QCommandLineOption followOpt(QStringLiteral("follow"), QStringLiteral("keep streaming events"));
@@ -448,7 +459,6 @@ int main(int argc, char *argv[])
     const QCommandLineOption recordOpt(QStringLiteral("record"), QStringLiteral("start: record calls"));
     const QCommandLineOption maxCallOpt = valueOpt("max-call-seconds", "start: call limit", "s");
     const QCommandLineOption callOpt = valueOpt("call", "call id", "id");
-    const QCommandLineOption fromOpt = valueOpt("from", "account to dial from", "aor");
     const QCommandLineOption accountOpt = valueOpt("account", "filter: account aor", "aor");
     const QCommandLineOption paramOpt = valueOpt("param", "filter: param substring", "text");
     const QCommandLineOption waitOpt(QStringLiteral("wait"), QStringLiteral("say/play: wait until played"));
@@ -458,19 +468,19 @@ int main(int argc, char *argv[])
     const QCommandLineOption maxOpt = valueOpt("max", "listen: max utterance seconds", "s", QStringLiteral("30"));
     const QCommandLineOption thresholdOpt = valueOpt("threshold", "listen: speech level dBFS", "db", QStringLiteral("-45"));
     const QCommandLineOption noSttOpt(QStringLiteral("no-stt"), QStringLiteral("listen: skip transcription"));
-    parser.addOptions({helpOpt, dirOpt, sinceOpt, timeoutOpt, followOpt, traceOpt, recordOpt, maxCallOpt, callOpt, fromOpt,
+    parser.addOptions({helpOpt, profileOpt, configOpt, yesOpt, sinceOpt, timeoutOpt, followOpt, traceOpt, recordOpt, maxCallOpt, callOpt,
                        accountOpt, paramOpt, waitOpt, outOpt, languageOpt, silenceOpt, maxOpt, thresholdOpt, noSttOpt});
     if (!parser.parse(QCoreApplication::arguments())) {
-        printText(QStringLiteral("sipctl: %1\nRun `sipctl help` for usage.").arg(parser.errorText()), stderr);
+        printText(QStringLiteral("leansipctl: %1\nRun `leansipctl help` for usage.").arg(parser.errorText()), stderr);
         return Usage;
     }
     if (parser.isSet(QStringLiteral("version"))) {
-        printText(QStringLiteral("sipctl %1").arg(QCoreApplication::applicationVersion()));
+        printText(QStringLiteral("leansipctl %1").arg(QCoreApplication::applicationVersion()));
         return Ok;
     }
 
     const QStringList args = parser.positionalArguments();
-    // `sipctl help [cmd]`, `sipctl --help`, `sipctl <cmd> --help`
+    // `leansipctl help [cmd]`, `leansipctl --help`, `leansipctl <cmd> --help`
     const bool helpCommand = !args.isEmpty() && args.first() == QLatin1String("help");
     if (helpCommand || parser.isSet(helpOpt)) {
         const QString topic = helpCommand ? args.value(1) : args.value(0);
@@ -480,7 +490,7 @@ int main(int argc, char *argv[])
         }
         const CommandHelp *c = findCommand(topic);
         if (!c) {
-            printText(QStringLiteral("sipctl: no command '%1'\n\n%2").arg(topic, overview()), stderr);
+            printText(QStringLiteral("leansipctl: no command '%1'\n\n%2").arg(topic, overview()), stderr);
             return Usage;
         }
         printText(commandHelp(*c));
@@ -492,8 +502,52 @@ int main(int argc, char *argv[])
     }
     const QString command = args.first();
     const QStringList rest = args.mid(1);
-    const QString baresipDir = QDir(parser.value(dirOpt)).absolutePath();
-    const QString socketPath = profile::socketPath(baresipDir);
+    if (!findCommand(command) && command != QLatin1String("start"))
+        return fail(QStringLiteral("unknown command '%1'; see `leansipctl help`").arg(command), Usage);
+
+    // transcribe needs neither a profile nor a daemon.
+    if (command == QLatin1String("transcribe")) {
+        if (rest.size() != 1)
+            return fail(QStringLiteral("usage: leansipctl transcribe <file.wav>"), Usage);
+        QString error;
+        const auto t = transcribeFile(rest.first(), parser.value(languageOpt), &error);
+        if (!t)
+            return fail(error);
+        QJsonObject out = *t;
+        out[QStringLiteral("ok")] = true;
+        printJson(out);
+        return Ok;
+    }
+
+    const QString configPath = QDir(parser.value(configOpt)).absolutePath();
+    QString configError;
+    const auto tomlFile = settings::load(configPath, &configError);
+    if (!tomlFile)
+        return fail(configError, Usage);
+    if (command == QLatin1String("profiles")) {
+        QJsonArray list;
+        for (const settings::Profile &p : tomlFile->profiles) {
+            list.append(QJsonObject{{QStringLiteral("name"), p.name},
+                                    {QStringLiteral("aor"), p.aor},
+                                    {QStringLiteral("displayName"), p.displayName},
+                                    {QStringLiteral("confirmDial"), p.confirmDial},
+                                    {QStringLiteral("running"), daemon::isRunning(profile::socketPath(p.name), 200)}});
+        }
+        printJson({{QStringLiteral("ok"), true},
+                   {QStringLiteral("config"), configPath},
+                   {QStringLiteral("default"), tomlFile->defaultProfile},
+                   {QStringLiteral("profiles"), list}});
+        return Ok;
+    }
+    const auto selected = settings::select(*tomlFile, parser.value(profileOpt), &configError);
+    if (!selected)
+        return fail(configError, Usage);
+    const settings::Profile &prof = *selected;
+    const QString socketPath = profile::socketPath(prof.name);
+    auto dialAllowed = [&] { return !prof.confirmDial || parser.isSet(yesOpt); };
+    const QString confirmHint =
+        QStringLiteral("profile %1 has confirm_dial = true (%2); add --yes to really place this call")
+            .arg(prof.name, prof.aor);
     const QString callArg = parser.value(callOpt);
 
     bool sinceOk = true;
@@ -516,7 +570,7 @@ int main(int argc, char *argv[])
             daemonArgs << QStringLiteral("--max-call-seconds") << parser.value(maxCallOpt);
         QString error;
         bool started = false;
-        if (!daemon::ensureRunning(baresipDir, daemonArgs, &error, &started))
+        if (!daemon::ensureRunning(prof.name, configPath, daemonArgs, &error, &started))
             return fail(error);
         Session s;
         if (!s.c.open(socketPath, 2000, &s.error))
@@ -541,7 +595,7 @@ int main(int argc, char *argv[])
                          || (parser.isSet(recordOpt) && !st.value(QStringLiteral("recording")).toBool())
                          || (parser.isSet(maxCallOpt)
                              && st.value(QStringLiteral("maxCallSeconds")).toInt() != parser.value(maxCallOpt).toInt())))
-            warnings << QStringLiteral("already running with other options; `sipctl stop` first to change them");
+            warnings << QStringLiteral("already running with other options; `leansipctl stop` first to change them");
         if (!warnings.isEmpty())
             out[QStringLiteral("warning")] = warnings.join(QStringLiteral("; "));
         if (st.value(QStringLiteral("uiOwned")).toBool())
@@ -550,32 +604,15 @@ int main(int argc, char *argv[])
         return Ok;
     }
 
-    if (!findCommand(command))
-        return fail(QStringLiteral("unknown command '%1'; see `sipctl help`").arg(command), Usage);
-
-    // transcribe needs no daemon.
-    if (command == QLatin1String("transcribe")) {
-        if (rest.size() != 1)
-            return fail(QStringLiteral("usage: sipctl transcribe <file.wav>"), Usage);
-        QString error;
-        const auto t = transcribeFile(rest.first(), parser.value(languageOpt), &error);
-        if (!t)
-            return fail(error);
-        QJsonObject out = *t;
-        out[QStringLiteral("ok")] = true;
-        printJson(out);
-        return Ok;
-    }
-
     Session s;
     if (!QFileInfo::exists(socketPath))
-        s.error = QStringLiteral("leansipd is not running for %1").arg(baresipDir);
+        s.error = QStringLiteral("leansipd is not running for profile %1").arg(prof.name);
     if (!s.error.isEmpty() || !s.c.open(socketPath, 1000, &s.error)) {
         if (command == QLatin1String("status")) {
             printJson({{QStringLiteral("ok"), true}, {QStringLiteral("running"), false}, {QStringLiteral("socket"), socketPath}});
             return NotRunning;
         }
-        return fail(s.error + QStringLiteral("; run `sipctl -d %1 start` first").arg(baresipDir), NotRunning);
+        return fail(s.error + QStringLiteral("; run `leansipctl -p %1 start` first").arg(prof.name), NotRunning);
     }
     auto replyOrFail = [&](const std::optional<daemon::Reply> &reply, QJsonObject extra = {}) {
         return reply ? printReply(*reply, std::move(extra)) : fail(s.error);
@@ -633,32 +670,16 @@ int main(int argc, char *argv[])
 
     if (command == QLatin1String("dial")) {
         if (rest.size() != 1)
-            return fail(QStringLiteral("usage: sipctl dial <number|sip-uri> [--from AOR]"), Usage);
+            return fail(QStringLiteral("usage: leansipctl dial <number|sip-uri> [--yes]"), Usage);
         QString target = rest.first().trimmed();
         if (target.startsWith(QLatin1String("tel:"), Qt::CaseInsensitive))
             target = target.mid(4);
         // Same whitelist as the dialer: the string goes verbatim to baresip's command parser.
         if (!CallController::isValidNumber(target))
             return fail(QStringLiteral("invalid number or URI '%1'").arg(target), Usage);
-        std::optional<daemon::Reply> reply;
-        if (parser.isSet(fromOpt)) {
-            AccountsFile accountsFile;
-            QString err;
-            accounts::readFile(QDir(baresipDir).filePath(QStringLiteral("accounts")), &accountsFile, &err);
-            QList<QPair<QString, QString>> steps{{QStringLiteral("uafind"), parser.value(fromOpt)}, {QStringLiteral("dial"), target}};
-            if (!accountsFile.accounts.isEmpty())
-                steps.append({QStringLiteral("uafind"), accountsFile.accounts.first().aor()});
-            QJsonArray results;
-            reply = s.sequence(steps, &results);
-            if (reply && results.size() >= 2) {
-                // The dial step decides; selecting the first account again is housekeeping.
-                const QJsonObject dialResult = results.at(1).toObject();
-                reply->ok = dialResult.value(QStringLiteral("ok")).toBool();
-                reply->data = dialResult.value(QStringLiteral("data")).toString();
-            }
-        } else {
-            reply = s.request(QStringLiteral("dial"), target, 10000);
-        }
+        if (!dialAllowed())
+            return fail(confirmHint, Usage);
+        const auto reply = s.request(QStringLiteral("dial"), target, 10000);
         if (!reply)
             return fail(s.error);
         QJsonObject extra;
@@ -670,7 +691,7 @@ int main(int argc, char *argv[])
     if (command == QLatin1String("dtmf")) {
         static const QRegularExpression digitsRe(QStringLiteral("^[0-9*#A-D]+$"));
         if (rest.size() != 1 || !digitsRe.match(rest.first()).hasMatch())
-            return fail(QStringLiteral("usage: sipctl dtmf <digits 0-9*#A-D> [--call ID]"), Usage);
+            return fail(QStringLiteral("usage: leansipctl dtmf <digits 0-9*#A-D> [--call ID]"), Usage);
         // One digit at a time, spaced so each gets its own RFC 4733 event.
         const QString digits = rest.first();
         qint64 seq = 0;
@@ -691,16 +712,19 @@ int main(int argc, char *argv[])
 
     if (command == QLatin1String("raw")) {
         if (rest.isEmpty())
-            return fail(QStringLiteral("usage: sipctl raw <command> [params...]"), Usage);
+            return fail(QStringLiteral("usage: leansipctl raw <command> [params...]"), Usage);
         if (rest.first() == QLatin1String("leansipd_hello") || rest.first() == QLatin1String("leansipd_bind"))
             return fail(QStringLiteral("%1 is reserved for the dialer").arg(rest.first()), Usage);
+        // dial, dialdir, uadial, ... and sequences containing them.
+        if (rest.join(u' ').contains(QLatin1String("dial"), Qt::CaseInsensitive) && !dialAllowed())
+            return fail(confirmHint, Usage);
         return replyOrFail(s.forCall(callArg, rest.first(), rest.mid(1).join(u' ')));
     }
 
     if (command == QLatin1String("say") || command == QLatin1String("play")) {
         const bool say = command == QLatin1String("say");
-        const QString usage = say ? QStringLiteral("usage: sipctl say <text> [--call ID] [--wait]")
-                                  : QStringLiteral("usage: sipctl play <file.wav> [--call ID] [--wait]");
+        const QString usage = say ? QStringLiteral("usage: leansipctl say <text> [--call ID] [--wait]")
+                                  : QStringLiteral("usage: leansipctl play <file.wav> [--call ID] [--wait]");
         if (rest.isEmpty() || (!say && rest.size() != 1))
             return fail(usage, Usage);
         QString file;
@@ -714,7 +738,7 @@ int main(int argc, char *argv[])
             if (!pcm)
                 return fail(error);
             temporary = !parser.isSet(outOpt);
-            file = temporary ? mediaPath(baresipDir, QStringLiteral("say")) : QFileInfo(parser.value(outOpt)).absoluteFilePath();
+            file = temporary ? mediaPath(prof.name, QStringLiteral("say")) : QFileInfo(parser.value(outOpt)).absoluteFilePath();
             if (!wav::writeFile(file, wav::fromRaw(*pcm, elevenlabs::kTtsSampleRate, 1), &error))
                 return fail(error);
         } else {
@@ -764,7 +788,7 @@ int main(int argc, char *argv[])
         const auto status = s.request(QStringLiteral("leansipd_status"));
         if (status && !dataValue(status->data).toObject().value(QStringLiteral("recording")).toBool())
             return fail(QStringLiteral("recording is off: listen needs a daemon started with --record "
-                                       "(`sipctl stop`, then `sipctl start --record`)"));
+                                       "(`leansipctl stop`, then `leansipctl start --record`)"));
         const QString callId = s.resolveCall(callArg);
         if (callId.isEmpty())
             return fail(QStringLiteral("no call to listen to"));
@@ -832,7 +856,7 @@ int main(int argc, char *argv[])
         utterance.samples = heard.samples.mid(from, to - from);
         const wav::Pcm mono = wav::convert(utterance, 16000, 1);
         const QString out = parser.isSet(outOpt) ? QFileInfo(parser.value(outOpt)).absoluteFilePath()
-                                                 : mediaPath(baresipDir, QStringLiteral("heard"));
+                                                 : mediaPath(prof.name, QStringLiteral("heard"));
         if (!wav::writeFile(out, mono, &error))
             return fail(error);
         QJsonObject result{{QStringLiteral("ok"), true},
@@ -883,7 +907,7 @@ int main(int argc, char *argv[])
         EventFilter filter{{}, callArg, parser.value(accountOpt), parser.value(paramOpt)};
         if (command == QLatin1String("wait")) {
             if (rest.size() != 1)
-                return fail(QStringLiteral("usage: sipctl wait <TYPE[,TYPE...]> [--since N] [--timeout S]"), Usage);
+                return fail(QStringLiteral("usage: leansipctl wait <TYPE[,TYPE...]> [--since N] [--timeout S]"), Usage);
             filter.types = rest.first().split(u',', Qt::SkipEmptyParts);
             const auto ev = waitFor(s, filter, since, timeoutMs);
             if (ev) {
@@ -921,5 +945,5 @@ int main(int argc, char *argv[])
         }
     }
 
-    return fail(QStringLiteral("unknown command '%1'; see `sipctl help`").arg(command), Usage);
+    return fail(QStringLiteral("unknown command '%1'; see `leansipctl help`").arg(command), Usage);
 }

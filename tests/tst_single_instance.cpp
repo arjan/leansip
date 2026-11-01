@@ -37,19 +37,6 @@ private slots:
         QCOMPARE(SingleInstance::encodeMessage("1\t2\n3", "a\tb"), QByteArray("123\tab\n"));
     }
 
-    void profileSuffixSeparatesBaresipDirs()
-    {
-        const QString home = QDir::homePath();
-        QVERIFY(SingleInstance::profileSuffix(home + "/.baresip").isEmpty());
-        QVERIFY(SingleInstance::profileSuffix(home + "/./.baresip/").isEmpty());
-
-        const QString second = SingleInstance::profileSuffix(home + "/.baresip2");
-        QCOMPARE(second.size(), 9);
-        QVERIFY(second.startsWith(u'-'));
-        QCOMPARE(SingleInstance::profileSuffix(home + "/.baresip2/"), second); // stable
-        QVERIFY(SingleInstance::profileSuffix(home + "/.baresip3") != second);
-    }
-
     void forwardFailsWhenNobodyListens()
     {
         SingleInstance second(m_name);

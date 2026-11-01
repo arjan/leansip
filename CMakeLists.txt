@@ -10,6 +10,9 @@ option(LEANSIP_BUILD_TESTS "Build unit tests" ON)
 option(LEANSIP_WERROR "Treat warnings as errors" ON)
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Network Widgets)
+# TOML parser for leansip.toml (Debian/Ubuntu: libtomlplusplus-dev), used header-only so the
+# binaries do not depend on the toml++ shared library at run time.
+find_path(TOMLPLUSPLUS_INCLUDE_DIR toml++/toml.hpp REQUIRED)
 qt_standard_project_setup()
 
 add_library(leansip_warnings INTERFACE)

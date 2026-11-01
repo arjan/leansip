@@ -1,6 +1,5 @@
 #pragma once
 
-#include "baresip_backend.h"
 #include "config_deriver.h"
 
 #include <QObject>
@@ -10,26 +9,24 @@
 namespace leansip {
 
 // Owns a child `baresip` started from a derived config directory with ctrl_tcp on loopback.
-class BaresipProcess : public QObject, public BaresipBackend {
+class BaresipProcess : public QObject {
     Q_OBJECT
 public:
     explicit BaresipProcess(QObject *parent = nullptr);
     ~BaresipProcess() override;
 
-    // `userDir` is the user's baresip directory (default ~/.baresip).
+    // Writes `setup` into the derived directory and starts baresip on it.
     // `binary` defaults to "baresip" resolved via PATH.
-    bool start(const QString &userDir, const QString &binary = QStringLiteral("baresip"));
+    bool start(const config_deriver::Setup &setup, const QString &binary = QStringLiteral("baresip"));
 
     // Graceful stop: terminate, then kill after a short grace period. Blocks briefly.
     void stop();
 
-    // BaresipBackend
-    bool restart() override;
-    QString host() const override { return QStringLiteral("127.0.0.1"); }
-    quint16 port() const override { return m_port; }
-    QString derivedAccountsPath() const override;
-    void setAccountsOverride(bool enabled) override { m_accountsOverride = enabled; }
-    QString lastError() const override { return m_error; }
+    // Stops and starts again with the setup of the last start().
+    bool restart();
+    QString host() const { return QStringLiteral("127.0.0.1"); }
+    quint16 port() const { return m_port; }
+    QString lastError() const { return m_error; }
 
     bool isRunning() const;
     QString derivedDir() const { return m_derivedDir; }
@@ -48,10 +45,6 @@ public:
     // Where the derived config goes: $XDG_RUNTIME_DIR/leansip or a temp fallback.
     static QString defaultDerivedDir();
 
-    // First run: if `<userDir>/config` is missing, lets baresip write its own template config
-    // (`baresip -f <userDir> -t 1`). Blocks for up to a few seconds.
-    static bool ensureUserConfig(const QString &userDir, QString *error,
-                                 const QString &binary = QStringLiteral("baresip"));
 
 signals:
     void finished(int exitCode, QProcess::ExitStatus status);
@@ -60,14 +53,14 @@ signals:
 
 private:
     QProcess m_process;
-    QString m_userDir;
+    config_deriver::Setup m_setup;
+    bool m_started = false;
     QString m_binary;
     QString m_derivedDir;
     QStringList m_extraArgs;
     config_deriver::Options m_options;
     QString m_error;
     quint16 m_port = 0;
-    bool m_accountsOverride = false;
     bool m_stopping = false;
 };
 

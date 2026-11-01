@@ -17,7 +17,7 @@
 
 namespace leansip {
 
-// Shares one baresip among any number of clients (the dialer, sipctl, an agent).
+// Shares one baresip among any number of clients (the dialer, leansipctl, an agent).
 //
 // Clients speak baresip's own ctrl_tcp protocol (netstring-framed JSON) over a Unix socket that
 // only this user can open. Commands are forwarded upstream with a fresh token, and the response

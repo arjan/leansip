@@ -256,7 +256,7 @@ void CallController::onEvent(const BaresipEvent &ev)
         setCallState(CallState::Incoming);
     } else if (t == QLatin1String("CALL_RINGING") || t == QLatin1String("CALL_PROGRESS")) {
         if (m_callState == CallState::Idle) {
-            // Placed by another client (sipctl): show who it is for.
+            // Placed by another client (leansipctl): show who it is for.
             m_callId = ev.callId;
             setPeer(ev.peerUri);
             setCallState(CallState::Outgoing);

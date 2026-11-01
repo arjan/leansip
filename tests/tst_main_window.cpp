@@ -243,22 +243,6 @@ private slots:
         QVERIFY(!m_window->isHelpVisible());
     }
 
-    void f2RequestsConfigurationFromAnyState()
-    {
-        QSignalSpy requested(m_window.get(), &MainWindow::configureRequested);
-        QTest::keyClick(m_window->numberEdit(), Qt::Key_F2);
-        QCOMPARE(requested.size(), 1);
-        QCOMPARE(m_window->numberEdit()->text(), ""); // F2 never reaches the field
-
-        // From the help page too, which closes first.
-        QTest::keyClick(m_window->numberEdit(), Qt::Key_F1);
-        QVERIFY(m_window->isHelpVisible());
-        QVERIFY(m_window->findChild<QLabel *>("helpLabel")->text().contains("F2"));
-        QTest::keyClick(m_window.get(), Qt::Key_F2);
-        QCOMPARE(requested.size(), 2);
-        QVERIFY(!m_window->isHelpVisible());
-    }
-
     void setAccountUpdatesHeader()
     {
         AccountInfo other;

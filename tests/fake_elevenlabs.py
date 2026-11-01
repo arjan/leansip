@@ -1,4 +1,4 @@
-"""Stand-in for the two ElevenLabs endpoints sipctl uses, for the loopback integration test.
+"""Stand-in for the two ElevenLabs endpoints leansipctl uses, for the loopback integration test.
 
 Prints the port it listens on (127.0.0.1) as its first line, then serves until killed.
   POST /v1/text-to-speech/<voice>?output_format=pcm_16000  -> 1 s of a 1 kHz tone, 16 kHz PCM

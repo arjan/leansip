@@ -472,7 +472,7 @@ private slots:
         Rig rig;
         QVERIFY(rig.connectAndRegister());
         QSignalSpy peer(&rig.controller, &CallController::peerChanged);
-        // sipctl dialled: we only see the events.
+        // leansipctl dialled: we only see the events.
         rig.server.sendEvent("CALL_RINGING", {{"peeruri", "sip:ivr@example.com"}});
         QTRY_COMPARE(rig.controller.callState(), CallState::Outgoing);
         QCOMPARE(rig.controller.peer(), "sip:ivr@example.com");

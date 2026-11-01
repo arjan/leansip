@@ -1,6 +1,8 @@
 #include "core/baresip_process.h"
+#include "core/settings.h"
 
 #include <QStandardPaths>
+#include <QTcpSocket>
 #include <QtTest>
 
 using namespace leansip;
@@ -17,76 +19,46 @@ private slots:
             QSKIP("baresip not installed");
     }
 
-    void ensureUserConfigCreatesTemplate()
+    void startsFromSetupAndRestartsQuietly()
     {
         QTemporaryDir root;
-        QVERIFY(root.isValid());
-        const QString dir = root.filePath("dotbaresip");
-        QString error;
-        QVERIFY2(BaresipProcess::ensureUserConfig(dir, &error), qPrintable(error));
-        QVERIFY(QFile::exists(dir + "/config"));
-        QVERIFY(QFile::exists(dir + "/accounts")); // baresip writes an (empty) accounts template too
-        const auto perms = QFileInfo(dir).permissions();
-        QVERIFY(!(perms & QFileDevice::ReadOther));
-
-        // Idempotent: a second call does nothing and keeps the existing config.
-        QFile cfg(dir + "/config");
-        QVERIFY(cfg.open(QIODevice::Append));
-        cfg.write("# marker\n");
-        cfg.close();
-        QVERIFY(BaresipProcess::ensureUserConfig(dir, &error));
-        QVERIFY(cfg.open(QIODevice::ReadOnly));
-        QVERIFY(cfg.readAll().contains("# marker"));
-    }
-
-    void ensureUserConfigFailsWithoutBinary()
-    {
-        QTemporaryDir root;
-        QString error;
-        QVERIFY(!BaresipProcess::ensureUserConfig(root.filePath("x"), &error, QStringLiteral("no-such-baresip")));
-        QVERIFY(error.contains("not found"));
-    }
-
-    void restartKeepsCandidateAccountsWhenOverridden()
-    {
-        // A private user dir with a template config and one non-registering account.
-        QTemporaryDir root;
-        const QString user = root.filePath("user");
-        QString error;
-        QVERIFY2(BaresipProcess::ensureUserConfig(user, &error), qPrintable(error));
-        QFile acc(user + "/accounts");
-        QVERIFY(acc.open(QIODevice::WriteOnly | QIODevice::Truncate));
-        acc.write("<sip:a@127.0.0.1:1;regint=0>\n");
-        acc.close();
+        config_deriver::Setup setup;
+        setup.config = settings::baresipConfig({{QStringLiteral("sip_listen"), {QStringLiteral("127.0.0.1:0")}},
+                                                {QStringLiteral("audio_player"), {QStringLiteral("aufile,/dev/null")}},
+                                                {QStringLiteral("audio_source"), {QStringLiteral("aufile,/dev/null")}}});
+        setup.accountLine = QStringLiteral("<sip:a@127.0.0.1:1;regint=0>");
 
         BaresipProcess process;
         process.setDerivedDir(root.filePath("derived")); // never touch the real runtime dir
-        QVERIFY2(process.start(user), qPrintable(process.lastError()));
+        process.setCaptureOutput(true);
+        QVERIFY2(process.start(setup), qPrintable(process.lastError()));
         QVERIFY(process.isRunning());
-        const quint16 firstPort = process.port();
-        QVERIFY(firstPort != 0);
-        QVERIFY(QFileInfo(process.derivedAccountsPath()).isSymLink());
+        QVERIFY(process.port() != 0);
+        QFile accounts(root.filePath("derived/accounts"));
+        QVERIFY(accounts.open(QIODevice::ReadOnly));
+        QCOMPARE(accounts.readAll(), "<sip:a@127.0.0.1:1;regint=0>\n");
 
-        // Put a candidate in place and restart with the override: the file must survive.
-        process.setAccountsOverride(true);
-        QFile::remove(process.derivedAccountsPath());
-        QFile cand(process.derivedAccountsPath());
-        QVERIFY(cand.open(QIODevice::WriteOnly));
-        cand.write("<sip:candidate@127.0.0.1:1;regint=0>\n");
-        cand.close();
+        // baresip answers on the control port it was given.
+        QTcpSocket ctrl;
+        QTRY_VERIFY_WITH_TIMEOUT((ctrl.connectToHost(process.host(), process.port()), ctrl.waitForConnected(200)), 5000);
+        ctrl.abort();
+
         QSignalSpy finished(&process, &BaresipProcess::finished);
         QVERIFY2(process.restart(), qPrintable(process.lastError()));
         QVERIFY(process.isRunning());
-        QVERIFY(!QFileInfo(process.derivedAccountsPath()).isSymLink());
         QCOMPARE(finished.size(), 0); // a deliberate restart is not reported as an exit
-
-        // Lifting the override re-links the user's file on the next restart.
-        process.setAccountsOverride(false);
-        QVERIFY2(process.restart(), qPrintable(process.lastError()));
-        QVERIFY(QFileInfo(process.derivedAccountsPath()).isSymLink());
 
         process.stop();
         QVERIFY(!process.isRunning());
+    }
+
+    void startFailsWithoutBinary()
+    {
+        QTemporaryDir root;
+        BaresipProcess process;
+        process.setDerivedDir(root.filePath("derived"));
+        QVERIFY(!process.start({}, QStringLiteral("no-such-baresip")));
+        QVERIFY(process.lastError().contains("not found"));
     }
 
 private:

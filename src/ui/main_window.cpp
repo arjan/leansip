@@ -227,8 +227,6 @@ QWidget *MainWindow::buildHelpPage()
         "<b>&uarr;</b> &nbsp;recall last number<br>"
         "<b>m</b> &nbsp;mute &middot; unmute the microphone in a call<br>"
         "<b>? F1</b> &nbsp;this help<br>"
-        "<b>F2</b> &nbsp;accounts: add, edit, reorder; Enter picks the active one, "
-        "Ctrl+S saves after a real registration<br>"
         "<b>Ctrl+Q</b> &nbsp;quit</p>"
         "<p>Drag anywhere to move the window. Esc closes this screen.</p>"));
     layout->addWidget(text);
@@ -271,12 +269,6 @@ bool MainWindow::handleKey(QKeyEvent *event)
     }
     if (key == Qt::Key_Question || key == Qt::Key_F1) {
         toggleHelp();
-        return true;
-    }
-    if (key == Qt::Key_F2) {
-        if (isHelpVisible())
-            toggleHelp();
-        emit configureRequested();
         return true;
     }
     if (isHelpVisible()) {

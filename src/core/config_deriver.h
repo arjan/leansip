@@ -4,11 +4,10 @@
 
 namespace leansip {
 
-// Produces a private baresip config directory for the child process:
-// the user's `config` with console/GTK UI modules removed, ctrl_tcp bound to loopback and
-// audio_path pointing at our own sounds directory (baresip's stock WAVs symlinked in, our
-// generated DTMF tones added), plus symlinks to the user's accounts/contacts/uuid so
-// credentials stay in one place.
+// Produces the private baresip config directory for the child process: the profile's config
+// with console/GTK UI modules removed, ctrl_tcp bound to loopback and audio_path pointing at our
+// own sounds directory (baresip's stock WAVs symlinked in, our generated DTMF tones added), and
+// the profile's account.
 namespace config_deriver {
 
 struct Options {
@@ -27,17 +26,22 @@ QString userAudioPath(const QString &userConfig);
 
 struct Result {
     bool ok = false;
-    QString dir;       // the derived directory to pass as `baresip -f <dir>`
+    QString dir;       // the directory to pass as `baresip -f <dir>`
     QString soundsDir; // where DTMF WAVs should be written (== audio_path in the derived config)
     QString error;
 };
 
-// Writes the derived config into `targetDir` (created 0700 if missing).
-// `userDir` is typically ~/.baresip; its `config` must exist (baresip creates it on first run).
-// With `linkAccounts == false` an existing `accounts` file in `targetDir` is left alone (used
-// while a candidate accounts file is being validated).
-Result deriveDirectory(const QString &userDir, const QString &targetDir, const QString &listen,
-                       bool linkAccounts = true, const Options &options = {});
+// What baresip runs with: the config text (before deriveConfigText), the `accounts` line, and
+// optionally the instance id for the `uuid` file.
+struct Setup {
+    QString config;
+    QString accountLine;
+    QString uuid;
+};
+
+// Writes config, accounts (0600) and uuid into `targetDir` (created 0700 if missing) and links
+// baresip's stock sounds into its sounds directory.
+Result writeDirectory(const Setup &setup, const QString &targetDir, const QString &listen, const Options &options = {});
 
 } // namespace config_deriver
 } // namespace leansip
