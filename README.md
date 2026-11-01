@@ -7,7 +7,7 @@ send DTMF, speak into the call, transcribe what the other side says, record, and
 diagnosis of the call afterwards. Every command prints JSON. A small keyboard-driven dialer
 shares the same calls, so you can watch, join or hang up what an agent is doing.
 
-<img src="docs/screenshot.png" width="272" alt="The leansip dialer during a call: the number on a green LCD, with MUTE and +1 CALL(S) indicators">
+<img src="docs/screenshot.png" width="272" alt="The leansip dialer during a call: bars of the caller's voice on a green LCD above the number and call time">
 
 ## Agents: leansipctl
 
@@ -56,9 +56,12 @@ leansip -p work            # another profile, in its own window
 leansip --record           # record calls
 ```
 
-The window is frameless and keyboard driven; drag anywhere to move it. Its LCD shows `MUTE`
-and `+N CALLS` when an agent has calls of its own. A second `leansip` for the same profile
-hands its number to the open window.
+The window is frameless and keyboard driven; drag anywhere to move it. During a call the LCD
+shows the far end's voice as bars spreading out from the centre, the last second of it, and
+your microphone small in the corner (`MUTE` in its place while muted); `+N CALLS` means an agent
+has calls of its own. An incoming call brings the window to the front and flashes it amber
+until you answer (Enter) or decline (Esc). A second `leansip` for the same profile hands its
+number to the open window.
 
 | Key          | Action                                                   |
 |--------------|----------------------------------------------------------|
@@ -67,6 +70,7 @@ hands its number to the open window.
 | `Esc`        | hang up · decline · clear · quit when empty              |
 | `↑`          | recall the last number                                   |
 | `m`          | mute · unmute the microphone                             |
+| `Ctrl+0-9`   | switch to the profile with that `shortcut`               |
 | `?` / `F1`   | help                                                     |
 | `Ctrl+Q`     | quit                                                     |
 
@@ -93,7 +97,8 @@ must be private (`chmod 600`).
 default_profile = "desk"
 
 [profiles.desk]
-display_name = "Desk"
+label = "Desk"                         # the name shown in the dialer
+shortcut = 1                           # Ctrl+1 switches the dialer to it
 aor = "sip:phone1@pbx.example.com"
 password_cmd = "rbw get sip-desk"      # or: password = "..."
 
