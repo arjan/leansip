@@ -285,11 +285,6 @@ QString currentCallId(const QString &listcalls)
     return m.hasMatch() ? m.captured(1) : QString();
 }
 
-bool processAlive(qint64 pid)
-{
-    return pid > 0 && (::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM);
-}
-
 QString compact(const QJsonArray &array)
 {
     return QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact));
@@ -628,9 +623,9 @@ int main(int argc, char *argv[])
             return replyOrFail(reply);
         // The daemon exits after its baresip has, so its SIP port is free once it is gone.
         const QDeadlineTimer deadline(10000);
-        while (processAlive(pid) && !deadline.hasExpired())
+        while (daemon::processAlive(pid) && !deadline.hasExpired())
             QThread::msleep(50);
-        if (processAlive(pid))
+        if (daemon::processAlive(pid))
             return fail(QStringLiteral("leansipd (pid %1) did not exit within 10 s").arg(pid));
         return printReply(*reply);
     }

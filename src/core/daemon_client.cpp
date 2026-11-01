@@ -42,6 +42,19 @@ QString lastLogLine(const QString &path)
 
 } // namespace
 
+bool processAlive(qint64 pid)
+{
+    if (pid <= 0 || (::kill(static_cast<pid_t>(pid), 0) != 0 && errno != EPERM))
+        return false;
+    // /proc/<pid>/stat: "<pid> (<comm>) <state> ..."; comm may contain spaces and parentheses.
+    QFile stat(QStringLiteral("/proc/%1/stat").arg(pid));
+    if (!stat.open(QIODevice::ReadOnly))
+        return true;
+    const QByteArray line = stat.readAll();
+    const qsizetype close = line.lastIndexOf(')');
+    return close < 0 || line.mid(close + 2, 1) != "Z";
+}
+
 bool isRunning(const QString &socketPath, int timeoutMs)
 {
     QLocalSocket probe;
@@ -96,7 +109,7 @@ bool ensureRunning(const QString &profileName, const QString &configPath, const 
     while (!deadline.hasExpired()) {
         if (isRunning(socket, 200))
             return true;
-        if (pid > 0 && ::kill(static_cast<pid_t>(pid), 0) != 0 && errno == ESRCH) {
+        if (pid > 0 && !processAlive(pid)) {
             if (isRunning(socket, 200)) // another leansipd won the race and serves the socket
                 return true;
             return fail(QStringLiteral("leansipd exited: %1").arg(lastLogLine(log)));

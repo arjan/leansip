@@ -15,6 +15,10 @@ namespace leansip::daemon {
 // Path of the leansipd binary: next to the running executable, else from PATH.
 QString executable();
 
+// True while process `pid` runs. An exited process that nobody has reaped yet (a zombie, as
+// under a container's init that does not reap orphans) counts as gone.
+bool processAlive(qint64 pid);
+
 // True when a leansipd accepts connections on `socketPath`.
 bool isRunning(const QString &socketPath, int timeoutMs = 300);
 

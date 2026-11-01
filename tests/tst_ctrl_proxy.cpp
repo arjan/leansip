@@ -1,4 +1,5 @@
 #include "core/ctrl_proxy.h"
+#include "core/daemon_client.h"
 #include "fake_baresip_server.h"
 
 #include <QJsonArray>
@@ -6,6 +7,9 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
+
+#include <sys/wait.h>
+#include <unistd.h>
 
 using namespace leansip;
 
@@ -42,6 +46,21 @@ struct ProxyRig {
 class TestCtrlProxy : public QObject {
     Q_OBJECT
 private slots:
+    void processAliveTreatsZombiesAsGone()
+    {
+        QVERIFY(daemon::processAlive(::getpid()));
+        QVERIFY(!daemon::processAlive(0));
+        const pid_t child = ::fork();
+        if (child == 0)
+            ::_exit(0);
+        QVERIFY(child > 0);
+        // Not reaped yet: the child is a zombie, which must count as exited.
+        QTRY_VERIFY(!daemon::processAlive(child));
+        int status = 0;
+        QCOMPARE(::waitpid(child, &status, 0), child);
+        QVERIFY(!daemon::processAlive(child));
+    }
+
     void routesEachResponseToTheClientThatAsked()
     {
         ProxyRig rig;
