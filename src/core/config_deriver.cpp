@@ -183,7 +183,9 @@ Result writeDirectory(const Setup &setup, const QString &targetDir, const QStrin
     if (error.isEmpty())
         error = write(QStringLiteral("accounts"), setup.accountLine + u'\n');
     if (error.isEmpty() && !setup.uuid.isEmpty())
-        error = write(QStringLiteral("uuid"), setup.uuid + u'\n');
+        // No newline: baresip uses the file's bytes verbatim in +sip.instance, and a newline
+        // there makes the Contact header invalid.
+        error = write(QStringLiteral("uuid"), setup.uuid);
     if (!error.isEmpty())
         return fail(error);
 

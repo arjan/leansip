@@ -161,7 +161,7 @@ private slots:
         QVERIFY(text.contains("127.0.0.1:5"));
         QVERIFY(text.contains("audio_path\t\t" + dir + "/sounds"));
         QCOMPARE(readFile(dir + "/accounts"), "<sip:a@b>;auth_pass=secret\n");
-        QCOMPARE(readFile(dir + "/uuid"), "1234-abcd\n");
+        QCOMPARE(readFile(dir + "/uuid"), "1234-abcd"); // verbatim in the Contact header
 
         // The password is only ever readable by us.
         QCOMPARE(QFileInfo(dir + "/accounts").permissions() & 0x0077, QFileDevice::Permissions());
