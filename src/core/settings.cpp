@@ -2,7 +2,9 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QProcess>
+#include <QSaveFile>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QStandardPaths>
@@ -205,7 +207,30 @@ struct Reader {
         return true;
     }
 
-    bool profile(const QString &name, const toml::node &n, const BaresipSettings &shared, Profile *p)
+    // [phonebook]: digit keys "0".."9", each a number or SIP address as typed in the dialer.
+    bool phonebook(const toml::node &n, const QString &where, Phonebook *out)
+    {
+        static const QRegularExpression digitRe(QStringLiteral("^[0-9]$"));
+        const auto *t = n.as_table();
+        if (!t)
+            return fail(where, QStringLiteral("expected a table, got %1").arg(nodeTypeName(n)));
+        for (auto &&[k, v] : *t) {
+            const QString key = qs(k.str());
+            const QString at = QStringLiteral("%1.%2").arg(where, key);
+            if (!digitRe.match(key).hasMatch())
+                return fail(at, QStringLiteral("keys are the digits 0..9 (Alt+<digit> in the dialer)"));
+            QString number;
+            if (!string(v, at, &number))
+                return false;
+            if (!isValidPhonebookNumber(number))
+                return fail(at, QStringLiteral("expected a number or SIP address without spaces, quotes, \\ or ; < >"));
+            out->insert(key.toInt(), number);
+        }
+        return true;
+    }
+
+    bool profile(const QString &name, const toml::node &n, const BaresipSettings &shared,
+                 const Phonebook &sharedPhonebook, Profile *p)
     {
         const QString where = QStringLiteral("profiles.%1").arg(name);
         if (!isValidName(name))
@@ -215,6 +240,7 @@ struct Reader {
             return fail(where, QStringLiteral("expected a table, got %1").arg(nodeTypeName(n)));
         p->name = name;
         p->baresip = shared;
+        p->phonebook = sharedPhonebook;
         for (auto &&[k, v] : *t) {
             const QString key = qs(k.str());
             const QString at = QStringLiteral("%1.%2").arg(where, key);
@@ -256,6 +282,11 @@ struct Reader {
                 ok = baresip(v, at, &own);
                 for (auto it = own.cbegin(); it != own.cend(); ++it)
                     p->baresip.insert(it.key(), it.value());
+            } else if (key == QLatin1String("phonebook")) {
+                Phonebook own;
+                ok = phonebook(v, at, &own);
+                for (auto it = own.cbegin(); it != own.cend(); ++it)
+                    p->phonebook.insert(it.key(), it.value());
             } else
                 return fail(at, QStringLiteral("unknown key"));
             if (!ok)
@@ -362,6 +393,9 @@ std::optional<File> parse(const QString &text, QString *error)
     BaresipSettings shared;
     if (const toml::node *b = root.get("baresip"); b && !r.baresip(*b, QStringLiteral("baresip"), &shared))
         return std::nullopt;
+    Phonebook sharedPhonebook;
+    if (const toml::node *pb = root.get("phonebook"); pb && !r.phonebook(*pb, QStringLiteral("phonebook"), &sharedPhonebook))
+        return std::nullopt;
     for (auto &&[k, v] : root) {
         const QString key = qs(k.str());
         if (key == QLatin1String("default_profile")) {
@@ -375,7 +409,7 @@ std::optional<File> parse(const QString &text, QString *error)
             }
             for (auto &&[name, node] : *profiles) {
                 Profile p;
-                if (!r.profile(qs(name.str()), node, shared, &p))
+                if (!r.profile(qs(name.str()), node, shared, sharedPhonebook, &p))
                     return std::nullopt;
                 for (const Profile &other : std::as_const(file.profiles)) {
                     if (p.shortcut >= 0 && other.shortcut == p.shortcut) {
@@ -386,7 +420,7 @@ std::optional<File> parse(const QString &text, QString *error)
                 }
                 file.profiles.insert(p.name, p);
             }
-        } else if (key != QLatin1String("baresip")) {
+        } else if (key != QLatin1String("baresip") && key != QLatin1String("phonebook")) {
             r.fail(key, QStringLiteral("unknown key"));
             return std::nullopt;
         }
@@ -427,6 +461,164 @@ std::optional<File> load(const QString &path, QString *error)
         return fail(QStringLiteral("%1: %2").arg(path, why));
     file->path = path;
     return file;
+}
+
+bool isValidPhonebookNumber(const QString &number)
+{
+    static const QRegularExpression re(QStringLiteral(R"(^[^\s"'\\<>;]{1,128}$)"));
+    return re.match(number).hasMatch();
+}
+
+namespace {
+
+// The lines of `text` with their line ends, so joining them gives `text` back.
+QStringList splitKeepingEnds(const QString &text)
+{
+    QStringList lines;
+    qsizetype start = 0;
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        if (text.at(i) == u'\n') {
+            lines.append(text.mid(start, i - start + 1));
+            start = i + 1;
+        }
+    }
+    if (start < text.size())
+        lines.append(text.mid(start));
+    return lines;
+}
+
+// Matches the header line of [phonebook] or [profiles.<name>.phonebook], name bare or quoted.
+bool isHeaderOf(const QString &line, const QString &profile)
+{
+    if (profile.isEmpty()) {
+        static const QRegularExpression re(QStringLiteral(R"(^\s*\[\s*phonebook\s*\]\s*(#.*)?\s*$)"));
+        return re.match(line).hasMatch();
+    }
+    const QString name = QRegularExpression::escape(profile);
+    const QRegularExpression re(
+        QStringLiteral(R"(^\s*\[\s*profiles\s*\.\s*(%1|"%1"|'%1')\s*\.\s*phonebook\s*\]\s*(#.*)?\s*$)").arg(name));
+    return re.match(line).hasMatch();
+}
+
+} // namespace
+
+PhonebookSave savePhonebookEntry(const QString &path, const QString &profile, int digit, const QString &number)
+{
+    PhonebookSave result;
+    auto fail = [&result](const QString &why) {
+        result.error = why;
+        return result;
+    };
+    if (digit < 0 || digit > 9)
+        return fail(QStringLiteral("phonebook keys are the digits 0..9"));
+    if (!isValidPhonebookNumber(number))
+        return fail(QStringLiteral("%1 cannot be a phonebook entry").arg(number));
+
+    const QString target = QFileInfo(path).canonicalFilePath(); // write through a link, not over it
+    if (target.isEmpty())
+        return fail(QStringLiteral("no config file at %1").arg(path));
+    QString error;
+    const auto before = load(target, &error); // also checks owner and mode
+    if (!before)
+        return fail(error);
+    if (!profile.isEmpty() && !before->profiles.contains(profile))
+        return fail(QStringLiteral("no profile %1 in %2").arg(profile, path));
+
+    QFile in(target);
+    if (!in.open(QIODevice::ReadOnly))
+        return fail(QStringLiteral("cannot read %1: %2").arg(target, in.errorString()));
+    const QByteArray raw = in.readAll();
+    in.close();
+    toml::parse_result parsed = toml::parse(std::string_view(raw.constData(), static_cast<size_t>(raw.size())));
+    if (!parsed)
+        return fail(QStringLiteral("%1 changed while saving; try again").arg(path));
+    const toml::table &root = parsed.table();
+
+    const std::string key = std::to_string(digit);
+    const std::string profileKey = profile.toStdString();
+    const toml::table *table = profile.isEmpty()
+        ? root["phonebook"].as_table()
+        : root["profiles"][profileKey]["phonebook"].as_table();
+    const QString tableName = profile.isEmpty() ? QStringLiteral("[phonebook]")
+                                                : QStringLiteral("[profiles.%1.phonebook]").arg(profile);
+    const QString handEdit = QStringLiteral("%1 in %2 has a layout leansip does not edit; change it by hand")
+                                 .arg(tableName, path);
+    const QString literal = QStringLiteral("\"%1\"").arg(number);
+
+    const QString text = QString::fromUtf8(raw);
+    QStringList lines = splitKeepingEnds(text);
+    if (table) {
+        if (table->is_inline())
+            return fail(handEdit);
+        if (const toml::node *old = table->get(key)) {
+            // Replace the one string on that entry's line.
+            const auto line = static_cast<qsizetype>(old->source().begin.line) - 1;
+            static const QRegularExpression value(QStringLiteral(R"(=\s*("[^"\\\n]*"|'[^'\n]*'))"));
+            if (line < 0 || line >= lines.size())
+                return fail(handEdit);
+            const QString &current = lines.at(line);
+            auto matches = value.globalMatch(current);
+            QRegularExpressionMatch only;
+            int count = 0;
+            while (matches.hasNext()) {
+                only = matches.next();
+                ++count;
+            }
+            if (count != 1)
+                return fail(handEdit);
+            if (const auto *s = old->as_string())
+                result.previous = qs(s->get());
+            lines[line] = current.left(only.capturedStart(1)) + literal + current.mid(only.capturedEnd(1));
+        } else {
+            // A new line right under the table's header.
+            const auto header = static_cast<qsizetype>(table->source().begin.line) - 1;
+            if (header < 0 || header >= lines.size() || !isHeaderOf(lines.at(header), profile))
+                return fail(handEdit);
+            const QString eol = lines.at(header).endsWith(QLatin1String("\r\n")) ? QStringLiteral("\r\n")
+                                                                               : QStringLiteral("\n");
+            if (!lines.at(header).endsWith(u'\n'))
+                lines[header] += eol;
+            lines.insert(header + 1, QStringLiteral("%1 = %2").arg(digit).arg(literal) + eol);
+        }
+    } else {
+        // No such table yet: a new one at the end of the file.
+        QString tail;
+        if (!text.isEmpty() && !text.endsWith(u'\n'))
+            tail += u'\n';
+        tail += profile.isEmpty() ? QStringLiteral("\n[phonebook]\n")
+                                  : QStringLiteral("\n[profiles.\"%1\".phonebook]\n").arg(profile);
+        tail += QStringLiteral("%1 = %2\n").arg(digit).arg(literal);
+        lines.append(tail);
+    }
+    const QString edited = lines.join(QString());
+
+    // The edit must mean exactly "this entry, nothing else".
+    toml::table expected = root;
+    toml::table *into = &expected;
+    if (!profile.isEmpty()) {
+        into = expected["profiles"][profileKey].as_table();
+        if (!into)
+            return fail(handEdit);
+    }
+    if (!into->contains("phonebook"))
+        into->insert("phonebook", toml::table{});
+    toml::table *pb = (*into)["phonebook"].as_table();
+    if (!pb)
+        return fail(handEdit);
+    pb->insert_or_assign(key, number.toStdString());
+    const QByteArray editedUtf8 = edited.toUtf8();
+    toml::parse_result check = toml::parse(std::string_view(editedUtf8.constData(), static_cast<size_t>(editedUtf8.size())));
+    if (!check || check.table() != expected || !parse(edited, &error))
+        return fail(handEdit);
+
+    QSaveFile out(target);
+    if (!out.open(QIODevice::WriteOnly)
+        || !out.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)
+        || out.write(editedUtf8) != editedUtf8.size() || !out.commit()) {
+        return fail(QStringLiteral("cannot write %1: %2").arg(target, out.errorString()));
+    }
+    result.ok = true;
+    return result;
 }
 
 std::optional<Profile> select(const File &file, const QString &requested, QString *error)

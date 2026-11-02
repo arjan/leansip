@@ -13,6 +13,107 @@ private slots:
         qunsetenv("LEANSIP_CONFIG");
     }
 
+    void savingAPhonebookEntryChangesOnlyThatLine()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("leansip.toml");
+        const QByteArray original = R"(# my phones
+[phonebook]   # shared
+1 = "0611111111"  # mum
+
+[profiles.desk]
+aor = "sip:phone1@pbx.example.com"
+password = "s3cret"   # keep me
+
+[profiles."lab.2"]
+aor = "sip:lab@pbx.example.com"
+)";
+        auto write = [&](const QByteArray &text) {
+            QFile f(path);
+            QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            f.write(text);
+            f.close();
+            QVERIFY(f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        };
+        auto read = [&] {
+            QFile f(path);
+            return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+        };
+        write(original);
+
+        // An existing entry: the value changes, its comment stays.
+        auto r = settings::savePhonebookEntry(path, {}, 1, "0622222222");
+        QVERIFY2(r.ok, qPrintable(r.error));
+        QCOMPARE(r.previous, "0611111111");
+        QByteArray want = original;
+        want.replace(R"(1 = "0611111111"  # mum)", R"(1 = "0622222222"  # mum)");
+        QCOMPARE(read(), want);
+        QCOMPARE(QFileInfo(path).permissions() & 0x0077, QFileDevice::Permissions());
+
+        // A new digit goes right under the header.
+        r = settings::savePhonebookEntry(path, {}, 7, "sip:desk@pbx.example.com");
+        QVERIFY2(r.ok, qPrintable(r.error));
+        QCOMPARE(r.previous, "");
+        want.replace("[phonebook]   # shared\n", "[phonebook]   # shared\n7 = \"sip:desk@pbx.example.com\"\n");
+        QCOMPARE(read(), want);
+
+        // A profile without a phonebook gets a table at the end; a dotted name is quoted.
+        r = settings::savePhonebookEntry(path, "lab.2", 3, "940");
+        QVERIFY2(r.ok, qPrintable(r.error));
+        want += "\n[profiles.\"lab.2\".phonebook]\n3 = \"940\"\n";
+        QCOMPARE(read(), want);
+        r = settings::savePhonebookEntry(path, "lab.2", 4, "941"); // now under that header
+        QVERIFY2(r.ok, qPrintable(r.error));
+        QString error;
+        const auto f = settings::load(path, &error);
+        QVERIFY2(f, qPrintable(error));
+        QCOMPARE(f->profiles.value("lab.2").phonebook.value(3), "940");
+        QCOMPARE(f->profiles.value("lab.2").phonebook.value(4), "941");
+        QCOMPARE(f->profiles.value("desk").phonebook.value(1), "0622222222");
+        QCOMPARE(f->profiles.value("desk").password, "s3cret");
+
+        // Through a link: the file it points to changes, the link stays a link.
+        const QString link = dir.filePath("link.toml");
+        QVERIFY(QFile::link(path, link));
+        r = settings::savePhonebookEntry(link, {}, 9, "112");
+        QVERIFY2(r.ok, qPrintable(r.error));
+        QVERIFY(QFileInfo(link).isSymLink());
+        QVERIFY(read().contains("9 = \"112\""));
+    }
+
+    void savingAPhonebookEntryRefusesWhatItCannotEditSafely()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("leansip.toml");
+        const QByteArray inlineTable = "[profiles.desk]\naor = \"sip:a@b\"\nphonebook = { 1 = \"1\", 2 = \"2\" }\n";
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(inlineTable);
+        f.close();
+        QVERIFY(f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+        auto r = settings::savePhonebookEntry(path, "desk", 1, "3");
+        QVERIFY(!r.ok);
+        QVERIFY2(r.error.contains("by hand"), qPrintable(r.error));
+        r = settings::savePhonebookEntry(path, "desk", 1, "06 12");
+        QVERIFY(!r.ok);
+        r = settings::savePhonebookEntry(path, "desk", 1, "a\"b");
+        QVERIFY(!r.ok);
+        r = settings::savePhonebookEntry(path, "nobody", 1, "3");
+        QVERIFY(!r.ok);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), inlineTable); // untouched
+        f.close();
+
+        // A file others can read is refused, as when loading.
+        QVERIFY(f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadOther));
+        r = settings::savePhonebookEntry(path, {}, 1, "3");
+        QVERIFY(!r.ok);
+        QVERIFY2(r.error.contains("chmod 600"), qPrintable(r.error));
+    }
+
     void parsesProfiles()
     {
         QString error;
@@ -116,6 +217,35 @@ account_params = { audio_codecs = "G722/16000/1", regint = 0 }
         QCOMPARE(settings::instanceId(other, QByteArray()), QString());
     }
 
+    void phonebookMergesSharedAndProfileEntries()
+    {
+        QString error;
+        const auto f = settings::parse(QStringLiteral(R"(
+[phonebook]
+1 = "0612345678"
+2 = "sip:helpdesk@pbx.example.com"
+
+[profiles.desk]
+aor = "sip:phone1@pbx.example.com"
+
+[profiles.desk.phonebook]
+2 = "940"
+0 = "+31201234567"
+
+[profiles.lab]
+aor = "sip:lab@pbx.example.com"
+)"), &error);
+        QVERIFY2(f, qPrintable(error));
+        const settings::Phonebook desk = f->profiles.value("desk").phonebook;
+        QCOMPARE(desk.size(), 3);
+        QCOMPARE(desk.value(0), "+31201234567");
+        QCOMPARE(desk.value(1), "0612345678");
+        QCOMPARE(desk.value(2), "940"); // the profile's entry wins
+        const settings::Phonebook lab = f->profiles.value("lab").phonebook;
+        QCOMPARE(lab.size(), 2);
+        QCOMPARE(lab.value(2), "sip:helpdesk@pbx.example.com");
+    }
+
     void labelAndShortcut()
     {
         QString error;
@@ -179,6 +309,9 @@ aor = "sip:plain@pbx.example.com"
         QTest::newRow("shortcut too big") << "[profiles.x]\n" + aor + "shortcut = 10" << "profiles.x.shortcut: expected a digit";
         QTest::newRow("shortcut negative") << "[profiles.x]\n" + aor + "shortcut = -1" << "expected a digit";
         QTest::newRow("shortcut string") << "[profiles.x]\n" + aor + "shortcut = \"1\"" << "expected a digit";
+        QTest::newRow("phonebook key") << "[phonebook]\n10 = \"112\"\n[profiles.x]\n" + aor << "phonebook.10: keys are the digits";
+        QTest::newRow("phonebook space") << "[profiles.x]\n" + aor + "phonebook = { 1 = \"06 1234\" }" << "profiles.x.phonebook.1: expected a number";
+        QTest::newRow("phonebook number") << "[profiles.x]\n" + aor + "phonebook = { 1 = 112 }" << "expected a string";
         QTest::newRow("shortcut twice") << "[profiles.x]\n" + aor + "shortcut = 1\n[profiles.y]\n" + aor + "shortcut = 1"
                                         << "already the shortcut of profile x";
         QTest::newRow("label newline") << "[profiles.x]\n" + aor + "label = \"a\\nb\"" << "single line";

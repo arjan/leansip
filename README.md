@@ -48,6 +48,8 @@ window that is already open.
 | `Esc`        | hang up · decline · clear · quit when empty              |
 | `↑`          | recall the last number                                   |
 | `m`          | mute · unmute the microphone                             |
+| `Alt+0-9`    | fill in that phonebook number (Enter dials it)           |
+|              | with a typed number: save it there (Enter: all profiles, Alt+Enter: this one) |
 | `Ctrl+0-9`   | switch to the profile with that `shortcut`               |
 | `?` / `F1`   | help                                                     |
 | `Ctrl+Q`     | quit                                                     |
@@ -122,6 +124,10 @@ must be private (`chmod 600`).
 
 ```toml
 default_profile = "desk"
+
+[phonebook]                            # Alt+<digit> fills in the number; Enter dials
+1 = "0612345678"
+2 = "sip:helpdesk@pbx.example.com"
 
 [profiles.desk]
 label = "Desk"                         # the name shown in the dialer

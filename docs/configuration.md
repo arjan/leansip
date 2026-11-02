@@ -36,6 +36,10 @@ default_profile = "desk"
 audio_player = "pulse,"
 audio_source = "pulse,"
 
+[phonebook]                        # Alt+<digit> in the dialer; for every profile
+1 = "0612345678"
+2 = "sip:helpdesk@pbx.example.com"
+
 [profiles.desk]
 display_name = "Desk"              # optional; the SIP display name the far end sees
 label = "Desk phone"               # optional; the dialer's name for it (default: display_name,
@@ -54,7 +58,11 @@ confirm_dial = false               # true: `leansipctl dial` needs --yes (for re
 
 [profiles.desk.baresip]            # this profile only; wins over [baresip]
 jitter_buffer_delay = "5-10"
-module_app = ["account.so", "contact.so", "debug_cmd.so", "menu.so", "netroam.so"]
+module_app = ["account.so", "contact.so", "debug_cmd.so", "menu.so"]
+
+[profiles.desk.phonebook]          # this profile only; wins over [phonebook] per digit
+2 = "940"
+0 = "+31201234567"
 ```
 
 ## Switching profiles in the dialer
@@ -64,6 +72,36 @@ most once in the file). The file is read again at that moment, so a new shortcut
 restarting. The old profile's leansipd stops, and unregisters, if the dialer started it; one that
 `leansipctl start` started keeps running. Switching waits until there is no call, and when another
 dialer window already serves the profile, that window comes to the front instead.
+
+## Phonebook
+
+Alt+<digit> in the dialer puts that digit's phonebook number in the number field; Enter then
+dials it, so a wrong key never places a call. The keys are the digits `0` to `9`, and a value
+is a number (`0612345678`, `+31201234567`) or a `sip:` address, without spaces, quotes,
+backslashes or `; < >`.
+
+`[phonebook]` applies to every profile. `[profiles.<name>.phonebook]` adds entries for one
+profile and replaces shared entries with the same digit; the example above gives `desk` the
+numbers 0612345678 (Alt+1), 940 (Alt+2) and +31201234567 (Alt+0). The file is read again at
+each key press, so edits work without restarting. Alt+<digit> does nothing during a call.
+
+### Saving from the dialer
+
+Type a number, press Alt+<digit>, and the dialer asks whether to save it as that entry. Enter
+saves it in `[phonebook]` for every profile, Alt+Enter in this profile's own phonebook, and Esc
+or any other key cancels. A number that Alt+<digit> just filled in is not offered again: the
+next Alt+<digit> fills in that entry instead, until you change the number.
+
+Saving edits `leansip.toml` in place. Only the entry's line changes, or one line is added under
+the table's header (a missing table goes at the end of the file); comments, order and everything
+else stay as they were. Before writing, leansip parses the edited text and checks that the only
+difference is that one entry; otherwise nothing is written. The file is replaced in one step
+and stays mode 600, and when `leansip.toml` is a link, the file it points to is changed. A
+phonebook written as an inline table (`phonebook = { … }`) or with dotted keys has to be edited
+by hand; the dialer says so.
+
+When you save for all profiles but the current profile has its own entry for that digit, the
+profile's entry still wins, and the dialer tells you.
 
 ## Passwords
 

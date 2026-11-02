@@ -278,6 +278,85 @@ private slots:
         QCOMPARE(m_window->numberEdit()->text(), "3");
     }
 
+    void altDigitAsksForAPhonebookEntry()
+    {
+        QSignalSpy asked(m_window.get(), &MainWindow::phonebookEntry);
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_4, Qt::AltModifier);
+        QCOMPARE(asked.size(), 1);
+        QCOMPARE(asked.at(0).at(0).toInt(), 4);
+        QCOMPARE(m_window->numberEdit()->text(), ""); // never typed
+
+        // The entry fills the field; dialing still needs Enter.
+        connectAndRegister();
+        m_window->fillNumber(QStringLiteral("0612345678"));
+        QCOMPARE(m_window->numberEdit()->text(), "0612345678");
+        QVERIFY(m_server->lastCommand() != "dial");
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_Return);
+        QTRY_COMPARE(m_server->lastCommand(), "dial");
+
+        // During a call Alt+digit neither asks nor sends DTMF, and nothing replaces the number.
+        m_server->sendResponse(m_server->lastToken(), true, "call id: c1");
+        m_server->sendEvent("CALL_ESTABLISHED", {{"id", "c1"}, {"peeruri", "sip:0612345678@example"}});
+        QTRY_COMPARE(m_controller->callState(), CallController::CallState::Active);
+        const QString before = m_server->lastCommand();
+        QTest::keyClick(m_window->numberEdit(), Qt::Key_5, Qt::AltModifier);
+        QCOMPARE(asked.size(), 1);
+        QCOMPARE(m_server->lastCommand(), before);
+        m_window->fillNumber(QStringLiteral("112"));
+        QVERIFY(m_window->numberEdit()->text() != "112");
+    }
+
+    void altDigitOnATypedNumberAsksToSaveIt()
+    {
+        QSignalSpy filled(m_window.get(), &MainWindow::phonebookEntry);
+        QSignalSpy saved(m_window.get(), &MainWindow::phonebookSave);
+        QLineEdit *field = m_window->numberEdit();
+        QTest::keyClicks(field, "0612345678");
+
+        // Asks first; holding Alt on its own does not answer.
+        QTest::keyClick(field, Qt::Key_3, Qt::AltModifier);
+        QVERIFY(m_window->statusLabel()->text().contains("Alt+3"));
+        QTest::keyClick(field, Qt::Key_Alt, Qt::AltModifier);
+        QCOMPARE(saved.size(), 0);
+        QCOMPARE(filled.size(), 0);
+
+        // Enter: for every profile.
+        QTest::keyClick(field, Qt::Key_Return);
+        QCOMPARE(saved.size(), 1);
+        QCOMPARE(saved.at(0).at(0).toInt(), 3);
+        QCOMPARE(saved.at(0).at(1).toString(), "0612345678");
+        QCOMPARE(saved.at(0).at(2).toBool(), false);
+        QCOMPARE(field->text(), "0612345678"); // not dialed, not cleared
+
+        // Alt+Enter: this profile only.
+        QTest::keyClick(field, Qt::Key_4, Qt::AltModifier);
+        QTest::keyClick(field, Qt::Key_Return, Qt::AltModifier);
+        QCOMPARE(saved.size(), 2);
+        QCOMPARE(saved.at(1).at(2).toBool(), true);
+
+        // Esc only drops the question; typing drops it and types.
+        QTest::keyClick(field, Qt::Key_5, Qt::AltModifier);
+        QTest::keyClick(field, Qt::Key_Escape);
+        QCOMPARE(field->text(), "0612345678");
+        QCOMPARE(m_window->statusLabel()->text(), "");
+        QTest::keyClick(field, Qt::Key_5, Qt::AltModifier);
+        QTest::keyClick(field, Qt::Key_9);
+        QCOMPARE(field->text(), "06123456789");
+        QCOMPARE(saved.size(), 2);
+
+        // A number just filled in from the phonebook is not offered again: Alt+digit recalls.
+        m_window->fillNumber("940");
+        QTest::keyClick(field, Qt::Key_2, Qt::AltModifier);
+        QCOMPARE(filled.size(), 1);
+        QCOMPARE(filled.at(0).at(0).toInt(), 2);
+        QCOMPARE(saved.size(), 2);
+        // Once edited it is a typed number again.
+        QTest::keyClick(field, Qt::Key_1);
+        QTest::keyClick(field, Qt::Key_2, Qt::AltModifier);
+        QCOMPARE(filled.size(), 1);
+        QVERIFY(m_window->statusLabel()->text().contains("Alt+2"));
+    }
+
     void ringingFlashesTheCase()
     {
         connectAndRegister();

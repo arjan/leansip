@@ -23,6 +23,9 @@ class WaveformView;
 //   Up            recall last number    ?/F1  help         Ctrl+Q  quit
 //   m             mute / unmute the microphone during a call
 //   Ctrl+0..9     switch to the profile with that shortcut (profileShortcut())
+//   Alt+0..9      fill in that phonebook entry (phonebookEntry(), then fillNumber()); with a
+//                 typed number, ask to save it there: Enter for every profile, Alt+Enter for
+//                 this one (phonebookSave())
 class MainWindow : public QWidget {
     Q_OBJECT
 public:
@@ -33,6 +36,8 @@ public:
     void raiseWindow();
     // Swap the account shown in the header.
     void setAccount(const AccountInfo &account);
+    // Puts `number` in the field without dialing; only while idle.
+    void fillNumber(const QString &number);
 
 public:
     // Accessors for tests.
@@ -53,6 +58,10 @@ public:
 signals:
     // Ctrl+<digit>: the user asks for the profile with that shortcut.
     void profileShortcut(int digit);
+    // Alt+<digit> while idle: the user asks for that phonebook entry.
+    void phonebookEntry(int digit);
+    // Confirmed: store `number` as Alt+<digit>, for this profile only or for all of them.
+    void phonebookSave(int digit, const QString &number, bool profileOnly);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -103,6 +112,8 @@ private:
     WaveformView *m_sentWave = nullptr;
     CallAudioMonitor m_audioMonitor;
     QString m_lastDialed;
+    QString m_recalledNumber;    // the field's text came from the phonebook and is unchanged
+    int m_pendingSaveDigit = -1; // asking whether to save the typed number as Alt+<digit>
     bool m_outgoingCall = false; // current/last call was started by us: restore the number afterwards
     CallController::CallState m_appliedState = CallController::CallState::Idle; // last state updateForState() saw
     QTimer m_elapsedTimer;

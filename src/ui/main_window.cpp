@@ -11,6 +11,8 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
+#include <utility>
+
 namespace leansip {
 
 namespace {
@@ -231,7 +233,9 @@ void MainWindow::buildUi(const AccountInfo &account)
     numberPalette.setColor(QPalette::PlaceholderText, QColor(QLatin1String(kLcdDim)));
     m_number->setPalette(numberPalette);
     m_number->installEventFilter(this);
-    connect(m_number, &QLineEdit::textChanged, this, [this] {
+    connect(m_number, &QLineEdit::textChanged, this, [this](const QString &text) {
+        if (text != m_recalledNumber)
+            m_recalledNumber.clear();
         fitNumberFont();
         updateForState(m_controller->callState());
     });
@@ -278,6 +282,8 @@ QWidget *MainWindow::buildHelpPage()
         "<b>Esc</b> &nbsp;hang up &middot; decline &middot; clear &middot; quit when empty<br>"
         "<b>&uarr;</b> &nbsp;recall last number<br>"
         "<b>m</b> &nbsp;mute &middot; unmute the microphone in a call<br>"
+        "<b>Alt+0-9</b> &nbsp;fill in that phonebook number; with a typed number: save it there "
+        "(Enter: all profiles, Alt+Enter: this one)<br>"
         "<b>Ctrl+0-9</b> &nbsp;switch to the profile with that shortcut<br>"
         "<b>? F1</b> &nbsp;this help<br>"
         "<b>Ctrl+Q</b> &nbsp;quit</p>"
@@ -324,6 +330,34 @@ bool MainWindow::handleKey(QKeyEvent *event)
     }
     if (ctrl && key >= Qt::Key_0 && key <= Qt::Key_9) {
         emit profileShortcut(key - Qt::Key_0);
+        return true;
+    }
+    const bool alt = event->modifiers().testFlag(Qt::AltModifier);
+    static const QList<int> modifierKeys{Qt::Key_Alt, Qt::Key_AltGr, Qt::Key_Shift, Qt::Key_Control, Qt::Key_Meta};
+    if (m_pendingSaveDigit >= 0 && !modifierKeys.contains(key)) {
+        const int digit = std::exchange(m_pendingSaveDigit, -1);
+        m_status->clear();
+        if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+            emit phonebookSave(digit, m_number->text().trimmed(), alt);
+            return true;
+        }
+        if (key == Qt::Key_Escape)
+            return true;
+        // Anything else cancels the question and then does what it always does.
+    }
+    if (alt && key >= Qt::Key_0 && key <= Qt::Key_9) {
+        // Never typed or sent as DTMF; only while idle. A number that was typed (not one just
+        // filled in from the phonebook) is offered for saving; otherwise the entry is filled in.
+        if (isHelpVisible() || m_controller->callState() != CallController::CallState::Idle)
+            return true;
+        const int digit = key - Qt::Key_0;
+        const QString number = m_number->text().trimmed();
+        if (number.isEmpty() || number == m_recalledNumber) {
+            emit phonebookEntry(digit);
+        } else {
+            m_pendingSaveDigit = digit;
+            m_status->setText(tr("Save as Alt+%1? Enter: all profiles, Alt+Enter: this one").arg(digit));
+        }
         return true;
     }
     if (key == Qt::Key_Question || key == Qt::Key_F1) {
@@ -462,6 +496,16 @@ void MainWindow::dialNumber(const QString &number)
     startCall();
 }
 
+void MainWindow::fillNumber(const QString &number)
+{
+    if (m_controller->callState() != CallController::CallState::Idle || isHelpVisible())
+        return;
+    m_status->clear();
+    m_recalledNumber = number;
+    m_number->setText(number);
+    m_number->setFocus();
+}
+
 void MainWindow::raiseWindow()
 {
     show();
@@ -475,6 +519,10 @@ void MainWindow::updateForState(CallController::CallState state)
 {
     using S = CallController::CallState;
     m_number->setReadOnly(state != S::Idle);
+    if (state != S::Idle && m_pendingSaveDigit >= 0) {
+        m_pendingSaveDigit = -1; // a call came in or started: the question is gone
+        m_status->clear();
+    }
 
     if (state == S::Incoming && !m_ringFlash.isActive()) {
         // Ringing: to the front (the compositor may only flag the window instead) and flash.

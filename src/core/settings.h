@@ -31,6 +31,9 @@ namespace settings {
 // template; a list gives one line per element, an empty list removes the key.
 using BaresipSettings = QMap<QString, QStringList>;
 
+// Alt+<digit> in the dialer fills in the number for that digit (0..9).
+using Phonebook = QMap<int, QString>;
+
 struct Profile {
     QString name;
     QString displayName; // SIP display name, sent to the far end
@@ -48,6 +51,7 @@ struct Profile {
     bool record = false;      // record every call, as if leansipd got --record
     QString recordDir;        // empty: <runtime dir>/recordings
     BaresipSettings baresip;  // [baresip] merged with [profiles.<name>.baresip]
+    Phonebook phonebook;      // [phonebook] merged with [profiles.<name>.phonebook]
 
     // The account without its password, for display and validation.
     AccountRecord account() const;
@@ -76,6 +80,23 @@ std::optional<File> parse(const QString &text, QString *error);
 // Reads and parses `path`. The file holds passwords, so it must belong to the current user and
 // not be readable by group or others.
 std::optional<File> load(const QString &path, QString *error);
+
+struct PhonebookSave {
+    bool ok = false;
+    QString previous; // the number the digit had there before; empty if none
+    QString error;
+};
+
+// Sets `digit` to `number` in [phonebook], or with `profile` in [profiles.<profile>.phonebook],
+// of the config file at `path` (a link is followed). Only that entry's line changes, or one line
+// is added; comments, order and everything else stay byte for byte. The edited text must parse
+// to the old file plus exactly this entry, or nothing is written. The file is replaced
+// atomically and stays private. Refuses a phonebook written as an inline table.
+PhonebookSave savePhonebookEntry(const QString &path, const QString &profile, int digit, const QString &number);
+
+// Whether `number` can be a phonebook entry: a number or SIP address, at most 128 characters,
+// without spaces, quotes, backslashes or ; < >.
+bool isValidPhonebookNumber(const QString &number);
 
 // `requested` if given, else $LEANSIP_PROFILE, else default_profile, else the only profile.
 std::optional<Profile> select(const File &file, const QString &requested, QString *error);

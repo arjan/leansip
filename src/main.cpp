@@ -188,6 +188,39 @@ int main(int argc, char *argv[])
     };
     wireInstance();
 
+    // Alt+<digit>: the current profile's phonebook entry, from the file as it is now.
+    QObject::connect(&window, &MainWindow::phonebookEntry, &app, [&](int digit) {
+        QString err;
+        const auto file = settings::load(configPath, &err);
+        if (!file) {
+            window.statusLabel()->setText(err);
+            return;
+        }
+        const QString entry = file->profiles.value(current.name).phonebook.value(digit);
+        if (entry.isEmpty()) {
+            window.statusLabel()->setText(QStringLiteral("No phonebook entry for Alt+%1").arg(digit));
+            return;
+        }
+        window.fillNumber(entry);
+    });
+    QObject::connect(&window, &MainWindow::phonebookSave, &app,
+                     [&](int digit, const QString &entry, bool profileOnly) {
+        const auto saved = settings::savePhonebookEntry(configPath, profileOnly ? current.name : QString(), digit, entry);
+        if (!saved.ok) {
+            window.statusLabel()->setText(saved.error);
+            return;
+        }
+        QString text = profileOnly ? QStringLiteral("Saved as Alt+%1 for this profile").arg(digit)
+                                   : QStringLiteral("Saved as Alt+%1 for all profiles").arg(digit);
+        // A profile's own entry wins over the shared one, so say when that hides the new number.
+        QString err;
+        if (const auto file = settings::load(configPath, &err);
+            !profileOnly && file && file->profiles.value(current.name).phonebook.value(digit) != entry) {
+            text = QStringLiteral("Saved for all profiles, but this profile's own Alt+%1 wins").arg(digit);
+        }
+        window.statusLabel()->setText(text);
+    });
+
     // Ctrl+<digit>: serve the profile with that shortcut in this window. The old profile's
     // daemon stops with the connection if this window started it (and unregisters), as when
     // the window closes; one leansipctl started keeps running.
