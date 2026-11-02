@@ -2,14 +2,54 @@
 
 A minimal, agent-friendly Linux SIP client.
 
-Coding agents and scripts place, answer and drive real phone calls with `leansipctl`: dial,
-send DTMF, speak into the call, transcribe what the other side says, record, and get a
-diagnosis of the call afterwards. Every command prints JSON. A small keyboard-driven dialer
-shares the same calls, so you can watch, join or hang up what an agent is doing.
+<img src="docs/screenshot-dial.png" width="272" alt="The leansip dialer before a call: a number typed on the green LCD"> <img src="docs/screenshot.png" width="272" alt="The leansip dialer during a call: bars of the caller's voice on a green LCD above the number and call time">
 
-<img src="docs/screenshot.png" width="272" alt="The leansip dialer during a call: bars of the caller's voice on a green LCD above the number and call time">
+Run `leansip` to open the dialer. Type a number and press Enter to call; Esc hangs up. When
+someone calls you, the window comes to the front and you answer with Enter. Digits typed during
+a call go out as DTMF and `m` mutes the microphone. Ctrl+0 to Ctrl+9 switch to the account
+(profile) that has that digit as its `shortcut`, and `?` lists all keys.
+
+## The user interface
+
+Leansip can be started with a number to directly dial it. It supports multiple profiles (SIP accounts).
+
+```
+leansip                    # open the dialer for the default profile
+leansip 0612345678         # open and dial
+leansip tel:+31201234567   # tel: and sip: URIs work; leansip handles tel: links
+leansip -p work            # another profile, in its own window
+leansip --record           # record calls
+```
+
+The window has no frame and is driven from the keyboard; drag it anywhere to move it. During a
+call the LCD shows the last second of the far end's voice as bars that spread out from the
+centre. Your own microphone level sits small in the top right corner, replaced by `MUTE` while
+you are muted. `+N CALLS` means an agent has calls of its own.
+
+An incoming call brings the window to the front and flashes it amber until you answer (Enter)
+or decline (Esc). Starting a second `leansip` for the same profile passes its number to the
+window that is already open.
+
+| Key          | Action                                                   |
+|--------------|----------------------------------------------------------|
+| `0-9 * # +`  | type a number; DTMF during a call                        |
+| `Enter`      | call · answer                                            |
+| `Esc`        | hang up · decline · clear · quit when empty              |
+| `↑`          | recall the last number                                   |
+| `m`          | mute · unmute the microphone                             |
+| `Ctrl+0-9`   | switch to the profile with that `shortcut`               |
+| `?` / `F1`   | help                                                     |
+| `Ctrl+Q`     | quit                                                     |
 
 ## Agents: leansipctl
+
+`leansipctl` lets coding agents and scripts make and answer real phone calls from the command
+line: dial, send DTMF, talk into the call, get a transcript of what the other side says, record
+it, and ask afterwards what went wrong. `start` brings the SIP account up in the background and
+the other commands act on its calls until `stop`. The dialer uses the same account and sees the
+same calls, so you can follow what an agent is doing and step in or hang up. The script below
+calls an IVR, waits for it to answer, listens to the greeting, replies, presses 1, hangs up and
+asks for an analysis of the call:
 
 ```bash
 leansipctl start --record                          # bring up the SIP account (profile)
@@ -24,69 +64,45 @@ leansipctl analyze --call "$call"                  # timing, codec, RTCP, levels
 leansipctl stop
 ```
 
-What an agent gets:
+Output is one JSON object per line on stdout. Exit codes are fixed: 0 ok, 1 failed or timed
+out, 2 usage error, 3 not running. `leansipctl help <command>` documents each command.
 
-- **One JSON object per line** on stdout, stable exit codes (0 ok, 1 failed or timed out,
-  2 usage, 3 not running) and `leansipctl help <command>` for every command.
-- **Events without races.** Every reply carries a sequence number; `wait --since <seq>` never
-  misses an event that fired before it started. `events --follow` streams them.
-- **Speech.** `say` speaks text into the call, `listen` returns a transcript of the far end's
-  next utterance, `transcribe` does a WAV file. Uses ElevenLabs (`ELEVENLABS_API_KEY`).
-- **Recording and analysis.** `start --record` keeps both directions as WAV; `analyze` reports
-  answer time, codec, packet loss and jitter, audio levels, one-way audio and other warnings.
-- **SIP traces.** `start --sip-trace` logs every SIP message.
-- **Several accounts.** Each profile runs separately (`-p NAME`); `leansipctl profiles` lists
-  them, never showing passwords.
+Every reply carries a sequence number. Pass it to `wait --since <seq>` and the wait also sees
+events that fired before it started, so there is no race between dialing and waiting.
+`events --follow` streams events as they happen.
 
-Guard rails, because every dial is a real call:
+`say` speaks text into the call and `listen` returns a transcript of the far end's next
+utterance; `transcribe` does the same for a WAV file. These use ElevenLabs and need
+`ELEVENLABS_API_KEY`.
+
+`start --record` keeps both directions of each call as WAV files. `analyze` reports answer
+time, codec, packet loss, jitter and audio levels, and warns about one-way audio and similar
+problems. `start --sip-trace` logs every SIP message.
+
+Each profile (one SIP account) runs on its own; pick one with `-p NAME`. `leansipctl profiles`
+lists them without passwords.
+
+Every dial is a real call, so there are limits:
 
 - Calls an agent places or answers hang up after 10 minutes (`--max-call-seconds`).
-- A profile with `confirm_dial = true`, for a real trunk say, dials only with `--yes`.
+- A profile with `confirm_dial = true` (a real trunk, for example) dials only with `--yes`.
 - Commands target a call by id (`--call`), so an agent never acts on the call you have open.
 
 Full reference: [docs/leansipctl.md](docs/leansipctl.md).
 
-## The dialer
-
-```
-leansip                    # open the dialer for the default profile
-leansip 0612345678         # open and dial
-leansip tel:+31201234567   # tel: and sip: URIs work; leansip handles tel: links
-leansip -p work            # another profile, in its own window
-leansip --record           # record calls
-```
-
-The window is frameless and keyboard driven; drag anywhere to move it. During a call the LCD
-shows the far end's voice as bars spreading out from the centre, the last second of it, and
-your microphone small in the corner (`MUTE` in its place while muted); `+N CALLS` means an agent
-has calls of its own. An incoming call brings the window to the front and flashes it amber
-until you answer (Enter) or decline (Esc). A second `leansip` for the same profile hands its
-number to the open window.
-
-| Key          | Action                                                   |
-|--------------|----------------------------------------------------------|
-| `0-9 * # +`  | type a number; DTMF during a call                        |
-| `Enter`      | call · answer                                            |
-| `Esc`        | hang up · decline · clear · quit when empty              |
-| `↑`          | recall the last number                                   |
-| `m`          | mute · unmute the microphone                             |
-| `Ctrl+0-9`   | switch to the profile with that `shortcut`               |
-| `?` / `F1`   | help                                                     |
-| `Ctrl+Q`     | quit                                                     |
-
 ## Install
 
-Releases carry a `.deb` and a `.tar.gz` for x86-64 Linux, built on Ubuntu 26.04 (they need Qt 6.10+).
-leansip uses [baresip](https://github.com/baresip/baresip) 1.1.0 or newer for SIP
-and audio; the `.deb` pulls it in.
+Each release has a `.deb` and a `.tar.gz` for x86-64 Linux. They are built on Ubuntu 26.04
+and need Qt 6.10 or newer. SIP and audio are done by
+[baresip](https://github.com/baresip/baresip) 1.1.0 or newer, which the `.deb` installs.
 
 ```
 sudo apt install ./leansip_<version>_amd64.deb
 ```
 
-With the tarball, install baresip (1.1.0+) and Qt 6 yourself. `SHA256SUMS` has the checksums, and
-`gh attestation verify <file> --repo arjan/leansip` checks a file came from this repository's
-release workflow.
+With the tarball you install baresip and Qt yourself. `SHA256SUMS` has the checksums, and
+`gh attestation verify <file> --repo arjan/leansip` checks that a file was built by this
+repository's release workflow.
 
 ## Configuration
 
@@ -108,9 +124,10 @@ password_cmd = "rbw get sip-trunk"
 confirm_dial = true                    # leansipctl dial needs --yes
 ```
 
-Every option, audio and codec settings included: [docs/configuration.md](docs/configuration.md).
+Most profiles need only `aor` and a password. All options, including audio and codec
+settings, are in [docs/configuration.md](docs/configuration.md).
 
-## Build
+## Building / development
 
 ```
 sudo apt install build-essential cmake ninja-build qt6-base-dev libtomlplusplus-dev baresip-core
@@ -120,10 +137,11 @@ ctest --test-dir build --output-on-failure
 ./build/src/leansip
 ```
 
-Building needs Qt 6.4 or newer; running needs baresip 1.1.0 or newer (Ubuntu 26.04 has it,
-24.04's 1.0.0 is too old). `sudo cmake --install build` installs it; `cpack` in the build directory makes the release
-packages. How the pieces fit together, and how to cut a release:
-[docs/architecture.md](docs/architecture.md).
+Building needs Qt 6.4 or newer. Running needs baresip 1.1.0 or newer: Ubuntu 26.04 has it,
+but 24.04 ships 1.0.0, which is too old. `sudo cmake --install build` installs leansip, and
+`cpack` in the build directory makes the release packages.
+[docs/architecture.md](docs/architecture.md) explains how the parts fit together and how to
+cut a release.
 
 ## License
 
