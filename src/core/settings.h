@@ -43,7 +43,7 @@ struct Profile {
     QString passwordCmd; // run with /bin/sh -c; the first line of its output is the password
     QString outbound;
     QMap<QString, QString> accountParams; // more ";key=value" account parameters
-    QString uuid;        // baresip's instance id; baresip makes one up when empty
+    QString uuid;        // baresip's instance id; empty: instanceId() derives one
     bool confirmDial = false; // leansipctl dials only with --yes
     bool record = false;      // record every call, as if leansipd got --record
     QString recordDir;        // empty: <runtime dir>/recordings
@@ -85,6 +85,15 @@ std::optional<QString> password(const Profile &profile, QString *error, int time
 
 // The line for baresip's `accounts` file.
 std::optional<QString> accountLine(const Profile &profile, const QString &password, QString *error);
+
+// baresip's instance id (+sip.instance) for this profile: `uuid` when set, otherwise a name-based
+// UUID of the machine id, the profile name and its address, so it stays the same across restarts
+// and reboots but differs between machines that share the config file. Only a hash of the
+// machine id leaves the machine. Empty when `uuid` is unset and `machineId` is empty (baresip
+// then makes one up).
+QString instanceId(const Profile &profile, const QByteArray &machineId);
+// The contents of /etc/machine-id, trimmed; empty when it cannot be read.
+QByteArray machineId();
 
 // The built-in baresip config with `overrides` applied.
 QString baresipConfig(const BaresipSettings &overrides);

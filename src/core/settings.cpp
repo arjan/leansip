@@ -6,6 +6,7 @@
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QUuid>
 
 #include <csignal>
 #include <string_view>
@@ -497,6 +498,26 @@ std::optional<QString> accountLine(const Profile &profile, const QString &passwo
         return std::nullopt;
     }
     return r.toLine();
+}
+
+QString instanceId(const Profile &profile, const QByteArray &machineId)
+{
+    if (!profile.uuid.isEmpty())
+        return profile.uuid;
+    if (machineId.isEmpty())
+        return QString();
+    // Fixed namespace for leansip instance ids; changing it changes every derived id.
+    static const QUuid ns(QStringLiteral("8f0c2d6e-5b1a-4c7e-9d3f-2a6b8e4c1f70"));
+    const QByteArray name = machineId + '\n' + profile.name.toUtf8() + '\n' + profile.aor.toUtf8();
+    return QUuid::createUuidV5(ns, name).toString(QUuid::WithoutBraces);
+}
+
+QByteArray machineId()
+{
+    QFile f(QStringLiteral("/etc/machine-id"));
+    if (!f.open(QIODevice::ReadOnly))
+        return QByteArray();
+    return f.read(256).trimmed();
 }
 
 QString baresipTemplate()

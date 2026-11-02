@@ -12,6 +12,21 @@ setting.
 `--profile`/`-p` if given, else `$LEANSIP_PROFILE`, else `default_profile`, else the only profile
 in the file.
 
+## A minimal profile
+
+Most profiles need only the address, the password and, behind a proxy, the outbound proxy:
+
+```toml
+[profiles.desk]
+aor = "sip:phone1@pbx.example.com"
+password_cmd = "rbw get sip-desk"
+outbound = "sip:127.0.0.1:5060"    # only when the provider needs one
+```
+
+Everything else has a default: UDP for `sip:` addresses, the user part of `aor` as `auth_user`,
+an instance id derived per machine (see "Instance id"), and the built-in baresip settings (see
+"baresip settings"). Add a `[profiles.<name>.baresip]` table only for what should differ.
+
 ## Example with every option
 
 ```toml
@@ -32,7 +47,7 @@ auth_user = "phone1"               # optional; defaults to the user part
 password_cmd = "rbw get sip-desk"  # or: password = "..."
 outbound = "sip:127.0.0.1:5060"    # optional outbound proxy
 account_params = { audio_codecs = "opus/48000/2,PCMA/8000/1", regint = 600 }
-uuid = "..."                       # optional; keeps baresip's instance id stable
+uuid = "..."                       # optional; see "Instance id"
 record = false                     # record every call (like --record)
 record_dir = "~/leansip-calls"     # optional; default <runtime dir>/recordings
 confirm_dial = false               # true: `leansipctl dial` needs --yes (for real trunks)
@@ -57,6 +72,15 @@ starts baresip; the first line it prints is the password, and a failing command 
 It may take up to a minute, for instance while a password manager asks to be unlocked; after
 that it is killed together with anything it started. A password must not contain spaces, quotes
 or `; < >`.
+
+## Instance id
+
+baresip sends an instance id (`+sip.instance`) with each registration, so the registrar can tell
+a restarted phone from a second one. Without `uuid`, leansip derives it from `/etc/machine-id`,
+the profile name and `aor`: it stays the same across restarts and reboots and differs on another
+machine that uses the same file. Renaming the profile or changing `aor` gives a new one; the
+registrar then keeps the old binding until it expires. Only a hash of the machine id is sent.
+Set `uuid` to pin a specific id, for instance one an older baresip setup used.
 
 ## Account parameters
 

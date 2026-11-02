@@ -92,7 +92,8 @@ std::optional<config_deriver::Setup> loadSetup(const QString &configPath, const 
     const auto line = settings::accountLine(*profile, *password, error);
     if (!line)
         return std::nullopt;
-    config_deriver::Setup setup{settings::baresipConfig(profile->baresip), *line, profile->uuid};
+    config_deriver::Setup setup{settings::baresipConfig(profile->baresip), *line,
+                                 settings::instanceId(*profile, settings::machineId())};
     if (const QString tls = config_deriver::tlsProblem(setup); !tls.isEmpty()) {
         *error = tls;
         return std::nullopt;

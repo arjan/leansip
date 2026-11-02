@@ -96,6 +96,26 @@ account_params = { audio_codecs = "G722/16000/1", regint = 0 }
         QVERIFY(!error.contains("a;b"));
     }
 
+    void instanceIdIsStableAndPerMachine()
+    {
+        settings::Profile p;
+        p.name = QStringLiteral("desk");
+        p.aor = QStringLiteral("sip:phone1@pbx.example.com");
+        const QString id = settings::instanceId(p, "machine-a");
+        static const QRegularExpression uuid(QStringLiteral("^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"));
+        QVERIFY2(uuid.match(id).hasMatch(), qPrintable(id));
+        QCOMPARE(settings::instanceId(p, "machine-a"), id);
+        QVERIFY(settings::instanceId(p, "machine-b") != id);
+        settings::Profile other = p;
+        other.name = QStringLiteral("lab");
+        QVERIFY(settings::instanceId(other, "machine-a") != id);
+
+        // A uuid in the profile wins; without one or a machine id baresip makes one up.
+        p.uuid = QStringLiteral("1234-abcd");
+        QCOMPARE(settings::instanceId(p, "machine-a"), "1234-abcd");
+        QCOMPARE(settings::instanceId(other, QByteArray()), QString());
+    }
+
     void labelAndShortcut()
     {
         QString error;

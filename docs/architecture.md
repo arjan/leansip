@@ -49,7 +49,8 @@ leansipd writes baresip's configuration directory into the runtime directory:
   activity display and frees what it has read, and leansipd deletes them when the call ends and
   removes `live/` when it exits.
 - `accounts`: the profile's account line with the password, mode 0600, never written through a
-  link, and removed when leansipd exits. `uuid` when the profile sets one.
+  link, and removed when leansipd exits. `uuid`: the profile's instance id, its own `uuid` or one
+  derived from `/etc/machine-id` and the profile (see "Instance id" in configuration.md).
 
 It then runs `baresip -f <that dir>` and stops it on exit. The password is never logged or
 shown by leansip, leansipctl or the dialer.
