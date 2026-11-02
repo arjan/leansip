@@ -9,6 +9,17 @@ someone calls you, the window comes to the front and you answer with Enter. Digi
 a call go out as DTMF and `m` mutes the microphone. Ctrl+0 to Ctrl+9 switch to the account
 (profile) that has that digit as its `shortcut`, and `?` lists all keys.
 
+## Why not just baresip?
+
+leansip uses [baresip](https://github.com/baresip/baresip) for SIP and audio, and adds:
+
+- All accounts are profiles in one config file, instead of one baresip config directory per
+  account.
+- `leansip 0612345678` opens a window and dials, and `tel:` links open in leansip.
+- A small graphical dialer, where baresip has a console menu.
+- A daemon per profile with a control command, `leansipctl`, that agents and scripts use to
+  automate calls and run end-to-end tests of phone services.
+
 ## The user interface
 
 Leansip can be started with a number to directly dial it. It supports multiple profiles (SIP accounts).
