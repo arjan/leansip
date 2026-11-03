@@ -91,7 +91,7 @@ per event) and `ts` (milliseconds since the epoch). leansipd keeps the last 2000
 
 | Type | When |
 |---|---|
-| `REGISTER_OK`, `REGISTER_FAIL`, `UNREGISTERING` | registration; `param` holds the SIP status |
+| `REGISTER_OK`, `REGISTER_FAIL`, `UNREGISTERING` | registration; `param` holds the SIP status. baresip often registers before leansipd is connected; then leansipd journals the state from `reginfo` right after `BACKEND_UP`, with `param` `"from reginfo"`, so `wait REGISTER_OK --since <seq of start>` works |
 | `CALL_INCOMING` | a call rings here |
 | `CALL_RINGING`, `CALL_PROGRESS` | outgoing call: 180 / 183 received |
 | `CALL_ANSWERED`, `CALL_ESTABLISHED` | the call is up |

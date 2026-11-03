@@ -135,6 +135,67 @@ private slots:
         QVERIFY(!ra.last().first().value<BaresipResponse>().ok);
     }
 
+    // baresip registered before we connected: the REGISTER_OK is gone, reginfo fills it in.
+    void journalsRegistrationFromReginfoAfterBackendUp_data()
+    {
+        QTest::addColumn<QString>("reginfo");
+        QTest::addColumn<QString>("expected"); // "" = nothing journalled
+        const QString head = QStringLiteral("\nUser Agents (1):\n");
+        QTest::newRow("registered") << head + "0 - sip:me@pbx:5060  \x1b[32mOK \x1b[;m kamailio Expires 3700s\n"
+                                    << "REGISTER_OK";
+        QTest::newRow("failed") << head + "0 - sip:me@pbx:5060  \x1b[31mERR\x1b[;m\n" << "REGISTER_FAIL";
+        QTest::newRow("still registering") << head + "0 - sip:me@pbx:5060  \x1b[33mzzz\x1b[;m\n" << "";
+        QTest::newRow("other account") << head + "0 - sip:other@pbx:5060  OK\n" << "";
+    }
+    void journalsRegistrationFromReginfoAfterBackendUp()
+    {
+        QFETCH(QString, reginfo);
+        QFETCH(QString, expected);
+        ProxyRig rig;
+        rig.proxy.setRegistrationSeedAor("sip:me@pbx:5060");
+        QVERIFY(rig.start());
+        QTRY_COMPARE(rig.server.received.size(), 1);
+        QCOMPARE(rig.server.lastCommand(), "reginfo");
+        const qint64 before = rig.proxy.lastSeq();
+        rig.server.sendResponse(rig.server.lastToken(), true, reginfo);
+
+        if (expected.isEmpty()) {
+            QTest::qWait(100);
+            QCOMPARE(rig.proxy.lastSeq(), before);
+            return;
+        }
+        QTRY_COMPARE(rig.proxy.lastSeq(), before + 1);
+        const QJsonObject ev = rig.proxy.eventsSince(before).first().toObject();
+        QCOMPARE(ev.value("type").toString(), expected);
+        QCOMPARE(ev.value("class").toString(), "register");
+        QCOMPARE(ev.value("accountaor").toString(), "sip:me@pbx:5060");
+        QCOMPARE(ev.value("param").toString(), "from reginfo");
+        QVERIFY(ev.value("event").toBool());
+    }
+
+    void liveRegisterEventBeatsTheReginfoSeed()
+    {
+        ProxyRig rig;
+        rig.proxy.setRegistrationSeedAor("sip:me@pbx:5060");
+        QVERIFY(rig.start());
+        QTRY_COMPARE(rig.server.received.size(), 1);
+        const QString token = rig.server.lastToken();
+        const qint64 before = rig.proxy.lastSeq();
+        rig.server.sendEvent("REGISTER_OK", {{"class", "register"}, {"accountaor", "sip:me@pbx:5060"}});
+        QTRY_COMPARE(rig.proxy.lastSeq(), before + 1);
+        rig.server.sendResponse(token, true, "0 - sip:me@pbx:5060  OK\n");
+        QTest::qWait(100);
+        QCOMPARE(rig.proxy.lastSeq(), before + 1); // no duplicate
+    }
+
+    void noReginfoWithoutASeedAor()
+    {
+        ProxyRig rig;
+        QVERIFY(rig.start());
+        QTest::qWait(50);
+        QVERIFY(rig.server.received.isEmpty());
+    }
+
     void refusesQuitAndUnknownLocalCommandsButRunsHandlers()
     {
         ProxyRig rig;

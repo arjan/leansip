@@ -193,6 +193,7 @@ int main(int argc, char *argv[])
 
     BaresipClient upstream;
     CtrlProxy proxy(&upstream);
+    proxy.setRegistrationSeedAor(prof.aor);
     if (!proxy.listen(socketPath, &error)) {
         qCritical("leansipd: %s", qPrintable(error));
         return 1;

@@ -91,6 +91,13 @@ public:
     void setBackendUp(bool up, const QString &reason = {});
     bool backendUp() const { return m_backendUp; }
 
+    // baresip registers at startup, usually before we are connected, and never repeats the
+    // REGISTER_* event, so the journal would miss it. With an AOR set, every BACKEND_UP is
+    // followed by a `reginfo`, and the account's state is journalled as REGISTER_OK or
+    // REGISTER_FAIL with param "from reginfo". Nothing is published when a live REGISTER_* event
+    // for the account arrived first, or when the account is still registering.
+    void setRegistrationSeedAor(const QString &aor) { m_seedAor = aor; }
+
     void setOwnerBindingAllowed(bool allowed) { m_bindingAllowed = allowed; }
     bool hasOwner() const { return !m_owner.isNull(); }
 
@@ -144,6 +151,7 @@ private:
     void publish(QJsonObject event);
     void failPending(const QString &why);
     bool isUi(QLocalSocket *client) const;
+    void seedRegistration();
     static void send(QLocalSocket *client, const QJsonObject &obj);
 
     BaresipClient *m_upstream;
@@ -162,6 +170,9 @@ private:
     qint64 m_seq = 0;
     bool m_backendUp = false;
     bool m_bindingAllowed = false;
+    QString m_seedAor;
+    quint64 m_backendGeneration = 0; // bumped on every BACKEND_UP; stale seeds are dropped
+    bool m_liveRegisterSeen = false; // a REGISTER_*/UNREGISTERING for m_seedAor since BACKEND_UP
     QPointer<QLocalSocket> m_owner;
 };
 

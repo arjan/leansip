@@ -1,5 +1,7 @@
 #include "ctrl_proxy.h"
 
+#include "call_controller.h"
+
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QLoggingCategory>
@@ -25,7 +27,14 @@ CtrlProxy::CtrlProxy(BaresipClient *upstream, QObject *parent)
     connect(&m_server, &QLocalServer::newConnection, this, &CtrlProxy::onNewConnection);
 
     connect(m_upstream, &BaresipClient::responseReceived, this, &CtrlProxy::onUpstreamResponse);
-    connect(m_upstream, &BaresipClient::rawEventReceived, this, [this](const QJsonObject &ev) { publish(ev); });
+    connect(m_upstream, &BaresipClient::rawEventReceived, this, [this](const QJsonObject &ev) {
+        const QString type = ev.value(QStringLiteral("type")).toString();
+        if (!m_seedAor.isEmpty()
+            && (type.startsWith(QLatin1String("REGISTER_")) || type == QLatin1String("UNREGISTERING"))
+            && ev.value(QStringLiteral("accountaor")).toString(m_seedAor) == m_seedAor)
+            m_liveRegisterSeen = true;
+        publish(ev);
+    });
     connect(m_upstream, &BaresipClient::connected, this, [this] { setBackendUp(true); });
     connect(m_upstream, &BaresipClient::disconnected, this,
             [this] { setBackendUp(false, QStringLiteral("connection to baresip lost")); });
@@ -94,7 +103,37 @@ void CtrlProxy::setBackendUp(bool up, const QString &reason)
     ev[QStringLiteral("type")] = up ? QStringLiteral("BACKEND_UP") : QStringLiteral("BACKEND_DOWN");
     ev[QStringLiteral("param")] = reason;
     qCInfo(lcProxy) << (up ? "backend up" : "backend down") << reason;
+    if (up) {
+        ++m_backendGeneration;
+        m_liveRegisterSeen = false;
+    }
     publish(ev);
+    if (up && !m_seedAor.isEmpty())
+        seedRegistration();
+}
+
+void CtrlProxy::seedRegistration()
+{
+    const quint64 generation = m_backendGeneration;
+    runSequence({{QStringLiteral("reginfo"), {}}}, [this, generation](const QList<StepResult> &results) {
+        if (generation != m_backendGeneration || m_liveRegisterSeen)
+            return; // a newer baresip, or a live event that is fresher than this answer
+        if (results.isEmpty() || !results.first().ok) {
+            qCInfo(lcProxy) << "reginfo for the registration seed failed:"
+                            << (results.isEmpty() ? QString() : results.first().data);
+            return;
+        }
+        const auto state = CallController::parseRegInfo(results.first().data, m_seedAor);
+        if (state != CallController::RegistrationState::Registered
+            && state != CallController::RegistrationState::Failed)
+            return; // still registering: the live event will follow
+        const bool ok = state == CallController::RegistrationState::Registered;
+        qCInfo(lcProxy) << "registration seeded from reginfo:" << (ok ? "OK" : "FAIL");
+        publishEvent({{QStringLiteral("class"), QStringLiteral("register")},
+                      {QStringLiteral("type"), ok ? QStringLiteral("REGISTER_OK") : QStringLiteral("REGISTER_FAIL")},
+                      {QStringLiteral("accountaor"), m_seedAor},
+                      {QStringLiteral("param"), QStringLiteral("from reginfo")}});
+    });
 }
 
 QJsonArray CtrlProxy::eventsSince(qint64 since) const
