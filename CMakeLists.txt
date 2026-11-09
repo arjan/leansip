@@ -8,11 +8,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(LEANSIP_BUILD_TESTS "Build unit tests" ON)
 option(LEANSIP_WERROR "Treat warnings as errors" ON)
+# Which baresip leansipd runs when $LEANSIP_BARESIP is not set (see src/core/baresip_binary.h).
+set(LEANSIP_EMBED_BARESIP_DIR "" CACHE PATH
+    "Directory with a self-contained baresip and sounds/*.wav to embed in leansipd (static builds)")
+set(LEANSIP_BARESIP_PATH "" CACHE FILEPATH "baresip to run instead of the one in PATH (e.g. Homebrew's libexec)")
+set(LEANSIP_BARESIP_SOUNDS "" CACHE PATH "baresip's stock sounds for LEANSIP_BARESIP_PATH (default /usr/share/baresip)")
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Network Widgets)
 # TOML parser for leansip.toml (Debian/Ubuntu: libtomlplusplus-dev), used header-only so the
 # binaries do not depend on the toml++ shared library at run time.
-find_path(TOMLPLUSPLUS_INCLUDE_DIR toml++/toml.hpp REQUIRED)
+find_path(TOMLPLUSPLUS_INCLUDE_DIR NAMES toml++/toml.hpp toml++/toml.h REQUIRED) # .h before 3.4
 qt_standard_project_setup()
 
 add_library(leansip_warnings INTERFACE)

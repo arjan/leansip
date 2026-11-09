@@ -15,8 +15,12 @@ set -euo pipefail
 
 BIN=${1:?usage: integration_loopback.sh <bin dir>}
 HERE=$(cd -- "$(dirname -- "$0")" >/dev/null && pwd) # cd echoes the path when CDPATH is set
-command -v baresip >/dev/null || { echo "baresip not installed: skipping"; exit 77; }
-[ -d /usr/lib/baresip/modules ] || { echo "no /usr/lib/baresip/modules: skipping"; exit 77; }
+# $LEANSIP_BARESIP picks a baresip other than the system's (leansipd honours it too); a
+# leansipd with baresip embedded needs neither.
+if [ -z "${LEANSIP_BARESIP:-}" ] && [ -z "${LEANSIP_E2E_EMBEDDED:-}" ]; then
+    command -v baresip >/dev/null || { echo "baresip not installed: skipping"; exit 77; }
+    [ -d /usr/lib/baresip/modules ] || { echo "no /usr/lib/baresip/modules: skipping"; exit 77; }
+fi
 
 T=$(mktemp -d)
 SERVER_PID=
@@ -53,6 +57,7 @@ $3
 
 [profiles.$1.baresip]
 sip_listen = "127.0.0.1:$2"
+net_interface = "127.0.0.1" # baresip 4 leaves loopback addresses out unless named here
 module = ["g711.so", "aufile.so"]
 audio_player = "aufile,$T/$1-heard.wav"
 audio_source = "aufile,$T/silence.wav"
@@ -116,7 +121,7 @@ out=$(b raw dial "sip:alice@127.0.0.1:$PORT") && fail "raw dial without --yes: $
 expect "no call was placed" '.data | test("ESTABLISHED|OUTGOING|RINGING") | not' "$(b calls)"
 
 step call bob
-out=$(a dial "sip:bob@127.0.0.1:$((PORT + 2))")
+out=$(a dial "sip:bob@127.0.0.1:$((PORT + 2))") || fail "dial: $out"
 expect "dial" '.ok and (.call | length > 0)' "$out"
 CALL=$(echo "$out" | jq -r .call)
 SEQ=$(echo "$out" | jq -r .seq)

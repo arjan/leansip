@@ -72,7 +72,7 @@ bool linkInto(const QString &src, const QString &dst)
 
 } // namespace
 
-QString userAudioPath(const QString &userConfig)
+QString userAudioPath(const QString &userConfig, const QString &fallback)
 {
     const QStringList lines = userConfig.split(u'\n');
     for (const QString &line : lines) {
@@ -80,7 +80,7 @@ QString userAudioPath(const QString &userConfig)
         if (m.hasMatch())
             return m.captured(1);
     }
-    return QString(kDefaultAudioPath);
+    return fallback.isEmpty() ? QString(kDefaultAudioPath) : fallback;
 }
 
 QString deriveConfigText(const QString &userConfig, const QString &listen, const QString &audioPath,
@@ -191,7 +191,7 @@ Result writeDirectory(const Setup &setup, const QString &targetDir, const QStrin
 
     // baresip resolves every sound (ring, ringback, our tones) against one audio_path, so the
     // stock files must appear in ours too.
-    const QDir stock(userAudioPath(setup.config));
+    const QDir stock(userAudioPath(setup.config, options.stockSoundsDir));
     const QStringList wavs = stock.entryList({QStringLiteral("*.wav")}, QDir::Files);
     for (const QString &wav : wavs) {
         if (!linkInto(stock.filePath(wav), QDir(soundsDir).filePath(wav)))

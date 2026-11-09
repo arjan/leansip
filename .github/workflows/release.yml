@@ -1,5 +1,6 @@
 # Builds, tests and packages leansip for Linux when a v* tag is pushed, and publishes a GitHub
-# release with the .deb, the .tar.gz, SHA256SUMS and build provenance attestations.
+# release with the .deb, the .tar.gz, the static .tar.gz (from build.yml), SHA256SUMS and build
+# provenance attestations.
 # The tag must match project(... VERSION) in CMakeLists.txt.
 name: release
 
@@ -38,6 +39,10 @@ jobs:
             echo "tag $GITHUB_REF_NAME does not match project version $version" >&2
             exit 1
           fi
+          if ! grep -q "tag: \"$GITHUB_REF_NAME\"" Formula/leansip.rb; then
+            echo "Formula/leansip.rb does not install $GITHUB_REF_NAME; bump its tag" >&2
+            exit 1
+          fi
 
       - name: Build
         run: |
@@ -66,8 +71,15 @@ jobs:
             build/leansip-*.tar.gz
           if-no-files-found: error
 
+  # The static tarball, and the macOS build from the Homebrew formula (not attached: Homebrew
+  # users install from the tap).
+  build:
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+
   release:
-    needs: linux
+    needs: [linux, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write     # create the release
@@ -77,6 +89,11 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: packages
+          path: dist
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-static
           path: dist
 
       - name: Checksums

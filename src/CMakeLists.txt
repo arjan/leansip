@@ -42,11 +42,19 @@ qt_add_library(leansip_core STATIC
     core/call_analysis.h
     core/call_audio.cpp
     core/call_audio.h
+    core/baresip_binary.cpp
+    core/baresip_binary.h
 )
 target_include_directories(leansip_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(leansip_core PUBLIC Qt6::Core Qt6::Network PRIVATE leansip_warnings)
 target_include_directories(leansip_core SYSTEM PRIVATE ${TOMLPLUSPLUS_INCLUDE_DIR})
 target_compile_definitions(leansip_core PUBLIC LEANSIP_VERSION="${PROJECT_VERSION}")
+if(LEANSIP_BARESIP_PATH)
+    target_compile_definitions(leansip_core PRIVATE LEANSIP_BARESIP_PATH="${LEANSIP_BARESIP_PATH}")
+endif()
+if(LEANSIP_BARESIP_SOUNDS)
+    target_compile_definitions(leansip_core PRIVATE LEANSIP_BARESIP_SOUNDS="${LEANSIP_BARESIP_SOUNDS}")
+endif()
 
 qt_add_library(leansip_ui STATIC
     ui/main_window.cpp
@@ -58,11 +66,30 @@ target_link_libraries(leansip_ui PUBLIC leansip_core Qt6::Widgets PRIVATE leansi
 
 qt_add_executable(leansip main.cpp)
 target_link_libraries(leansip PRIVATE leansip_ui leansip_warnings)
+# A static Qt links only the default platform plugin (xcb, cocoa); add offscreen so that
+# QT_QPA_PLATFORM=offscreen (tests, headless checks) still works.
+get_target_property(leansip_qt_type Qt6::Core TYPE)
+if(leansip_qt_type STREQUAL "STATIC_LIBRARY")
+    set(LEANSIP_QT_STATIC ON CACHE INTERNAL "")
+    qt_import_plugins(leansip INCLUDE Qt6::QOffscreenIntegrationPlugin)
+endif()
 
 # The daemon that owns baresip, and the command-line client for it. Built next to the dialer,
 # which looks for leansipd in its own directory first.
 qt_add_executable(leansipd daemon/main.cpp)
 target_link_libraries(leansipd PRIVATE leansip_core leansip_warnings)
+# The static Linux build carries baresip inside leansipd: `baresip` and `sounds/*.wav` from this
+# directory become resources that baresip_binary extracts on first use.
+if(LEANSIP_EMBED_BARESIP_DIR)
+    if(NOT EXISTS "${LEANSIP_EMBED_BARESIP_DIR}/baresip")
+        message(FATAL_ERROR "LEANSIP_EMBED_BARESIP_DIR: no baresip in ${LEANSIP_EMBED_BARESIP_DIR}")
+    endif()
+    file(GLOB embedded_sounds "${LEANSIP_EMBED_BARESIP_DIR}/sounds/*.wav")
+    qt_add_resources(leansipd embedded_baresip
+        PREFIX /leansip/baresip
+        BASE "${LEANSIP_EMBED_BARESIP_DIR}"
+        FILES "${LEANSIP_EMBED_BARESIP_DIR}/baresip" ${embedded_sounds})
+endif()
 
 qt_add_executable(leansipctl leansipctl/main.cpp)
 target_link_libraries(leansipctl PRIVATE leansip_core leansip_warnings)

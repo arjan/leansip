@@ -216,7 +216,10 @@ baresip's command parser.
 `leansipctl raw help` lists what the running baresip accepts; call commands (`hold`, `mute`,
 `transfer`, `sndcode`, …) appear only while a call is active.
 
-## baresip 1.1.0 behaviour to know
+## baresip behaviour to know
+
+leansip runs the system's baresip 1.1.0 (the `.deb`) or its own 4.13 (the static Linux build
+and Homebrew); both pass the loopback test. Seen with 1.1.0:
 
 - `resume` replies "Invalid argument" even when it resumes; leansipctl checks `calls` and reports ok.
 - When an `aufile` source reaches the end of its file, baresip's menu module hangs up the call.
@@ -244,6 +247,7 @@ account_params = { regint = 0 }
 
 [profiles.alice.baresip]
 sip_listen = "127.0.0.1:15060"            # 15062 for bob: baresip may take the next port too
+net_interface = "127.0.0.1"               # baresip 4 ignores loopback addresses otherwise
 module = ["g711.so", "aufile.so"]
 audio_source = "aufile,/path/to/silence.wav"
 audio_player = "aufile,/path/to/heard.wav"

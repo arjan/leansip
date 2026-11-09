@@ -1,0 +1,102 @@
+# Builds every leansip binary: the static Linux tarball (Qt and baresip linked in, baresip
+# embedded in leansipd) and, on macOS, leansip from the Homebrew formula in Formula/.
+# release.yml calls it for the static tarball it attaches to a release.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  linux-static:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Static Qt takes most of the time; the GitHub Actions cache keeps that layer.
+      # Runs every test, including the loopback call with the embedded baresip.
+      - name: Build and test
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: packaging/linux-static/Dockerfile
+          outputs: type=local,dest=dist
+          cache-from: type=gha,scope=linux-static
+          cache-to: type=gha,mode=max,scope=linux-static
+
+      # On a distribution with neither Qt nor baresip, only the libraries a desktop has.
+      - name: Run it on a plain Ubuntu
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:24.04 sh -euxc '
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends \
+              libasound2t64 libfontconfig1 libfreetype6 libx11-6 libx11-xcb1 libxkbcommon0 libxkbcommon-x11-0 \
+              libxcb1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+              libxcb-render-util0 libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-xfixes0 libxcb-xkb1 \
+              libxcb-xinput0 libxcb-util1 libxcb-render0 >/dev/null
+            mkdir /opt/leansip && tar -xzf /dist/leansip-*.tar.gz -C /opt/leansip --strip-components=1
+            /opt/leansip/bin/leansipctl --version
+            /opt/leansip/bin/leansipd --version
+            QT_QPA_PLATFORM=offscreen /opt/leansip/bin/leansip --version
+            ! ldd /opt/leansip/bin/leansip /opt/leansip/bin/leansipd | grep "not found"
+          '
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-static
+          path: dist/leansip-*.tar.gz
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-15
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # Homebrew clones it
+
+      # The formula's --HEAD build, pointed at this checkout instead of main on GitHub.
+      - name: Install with the Homebrew formula
+        run: |
+          git switch -c ci-build
+          brew tap-new --no-git local/ci
+          sed "s#^  head .*#  head \"file://$GITHUB_WORKSPACE\", branch: \"ci-build\", using: :git#" Formula/leansip.rb \
+            > "$(brew --repository local/ci)/Formula/leansip.rb"
+          brew install --HEAD --build-from-source local/ci/leansip
+
+      - name: Test
+        run: |
+          brew test local/ci/leansip
+          leansipctl --version
+          leansipd --version
+          QT_QPA_PLATFORM=offscreen leansip --version
+
+      # What the formula installed, for trying a build without the tap. It uses Homebrew's Qt and
+      # libraries, so it needs those installed (brew install qtbase opus libsndfile openssl@4).
+      - name: Package
+        run: |
+          keg=$(brew --cellar leansip)/$(ls "$(brew --cellar leansip)")
+          tar -C "$keg" -czf "leansip-${GITHUB_SHA::12}-macos-$(uname -m).tar.gz" .
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos
+          path: leansip-*-macos-*.tar.gz
+          if-no-files-found: error

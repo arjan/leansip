@@ -13,6 +13,9 @@ namespace config_deriver {
 struct Options {
     // Non-empty: load sndfile.so and record every call, both directions, into this directory.
     QString recordDir;
+    // baresip's stock sounds (ring.wav, ...) when the config sets no audio_path; empty means
+    // /usr/share/baresip. Set for a baresip that is not the system's (embedded, Homebrew).
+    QString stockSoundsDir;
 };
 
 // Pure transformation of the config file text. `listen` is e.g. "127.0.0.1:41234",
@@ -21,8 +24,9 @@ struct Options {
 QString deriveConfigText(const QString &userConfig, const QString &listen, const QString &audioPath,
                          const Options &options = {});
 
-// The audio_path the user configured, or baresip's default when the line is absent/commented.
-QString userAudioPath(const QString &userConfig);
+// The audio_path the user configured, or `fallback` (empty: baresip's default,
+// /usr/share/baresip) when the line is absent/commented.
+QString userAudioPath(const QString &userConfig, const QString &fallback = QString());
 
 struct Result {
     bool ok = false;
