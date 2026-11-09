@@ -1,5 +1,6 @@
 #include "baresip_process.h"
 
+#include "baresip_binary.h"
 #include "config_deriver.h"
 #include "dtmf_tone.h"
 
@@ -10,7 +11,9 @@
 #include <QTcpServer>
 
 #include <csignal>
+#ifdef Q_OS_LINUX
 #include <sys/prctl.h>
+#endif
 
 Q_LOGGING_CATEGORY(lcProcess, "leansip.process")
 
@@ -28,7 +31,10 @@ BaresipProcess::BaresipProcess(QObject *parent)
     m_process.setInputChannelMode(QProcess::ForwardedInputChannel);
     // Never leave an orphaned baresip registered with the provider if we die uncleanly
     // (SIGKILL, crash): the kernel delivers SIGTERM to the child when its parent exits.
+    // macOS has no such signal; there a crashed leansipd leaves baresip running.
+#ifdef Q_OS_LINUX
     m_process.setChildProcessModifier([] { ::prctl(PR_SET_PDEATHSIG, SIGTERM); });
+#endif
     connect(&m_process, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
         if (!m_stopping) // a deliberate stop()/restart() is not something the UI should report
             emit finished(code, status);
@@ -86,6 +92,16 @@ bool BaresipProcess::start(const config_deriver::Setup &setup, const QString &bi
         m_error = QStringLiteral("could not allocate a loopback port");
         return false;
     }
+    QString program = binary;
+    if (program.isEmpty()) {
+        const baresip_binary::Location location = baresip_binary::locate();
+        if (!location.error.isEmpty()) {
+            m_error = location.error;
+            return false;
+        }
+        program = location.program;
+        m_options.stockSoundsDir = location.soundsDir;
+    }
     const QString listen = QStringLiteral("%1:%2").arg(host()).arg(m_port);
     const QString derivedDir = m_derivedDir.isEmpty() ? defaultDerivedDir() : m_derivedDir;
     if (!m_options.recordDir.isEmpty() && !QDir().mkpath(m_options.recordDir)) {
@@ -101,9 +117,9 @@ bool BaresipProcess::start(const config_deriver::Setup &setup, const QString &bi
     if (!dtmf::installSoundBank(derived.soundsDir))
         qCWarning(lcProcess) << "could not write DTMF tones to" << derived.soundsDir << "- keys will be silent";
 
-    const QString resolved = QStandardPaths::findExecutable(binary);
+    const QString resolved = QStandardPaths::findExecutable(program);
     if (resolved.isEmpty()) {
-        m_error = QStringLiteral("baresip executable '%1' not found in PATH").arg(binary);
+        m_error = QStringLiteral("baresip executable '%1' not found in PATH").arg(program);
         return false;
     }
 

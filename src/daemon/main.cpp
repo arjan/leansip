@@ -382,21 +382,37 @@ int main(int argc, char *argv[])
     });
 
     // --- per-call bookkeeping from baresip's events --------------------------------------------
+    // sndfile's dumps for a call: baresip 1.x creates them when the stream starts, before
+    // CALL_ESTABLISHED; baresip 4 only with the first audio frame, after it, and announces that
+    // with a MODULE event. So calls with media whose dumps have not shown up yet (oldest first)
+    // are retried on every event. Ringing calls are not: they have no stream to claim a dump.
+    auto matchRecording = [&](const QString &id) {
+        const auto files = recordings->onCallEvent(id);
+        if (files) {
+            proxy.publishEvent({{QStringLiteral("class"), QStringLiteral("leansipd")},
+                                {QStringLiteral("type"), recording ? QStringLiteral("RECORDING_STARTED")
+                                                                   : QStringLiteral("AUDIO_TAP")},
+                                {QStringLiteral("id"), id},
+                                {QStringLiteral("sent"), files->sent},
+                                {QStringLiteral("received"), files->received}});
+        }
+        return files.has_value();
+    };
+    QStringList awaitingRecording;
     QObject::connect(&upstream, &BaresipClient::rawEventReceived, &app, [&](const QJsonObject &ev) {
         const QString id = ev.value(QStringLiteral("id")).toString();
         const QString type = ev.value(QStringLiteral("type")).toString();
-        if (id.isEmpty() || ev.value(QStringLiteral("class")).toString() != QLatin1String("call"))
-            return;
+        const bool callEvent = !id.isEmpty() && ev.value(QStringLiteral("class")).toString() == QLatin1String("call");
         if (recordings) {
-            if (const auto files = recordings->onCallEvent(id)) {
-                proxy.publishEvent({{QStringLiteral("class"), QStringLiteral("leansipd")},
-                                    {QStringLiteral("type"), recording ? QStringLiteral("RECORDING_STARTED")
-                                                                       : QStringLiteral("AUDIO_TAP")},
-                                    {QStringLiteral("id"), id},
-                                    {QStringLiteral("sent"), files->sent},
-                                    {QStringLiteral("received"), files->received}});
-            }
+            if (callEvent && !matchRecording(id) && !recordings->filesFor(id) && !awaitingRecording.contains(id)
+                && (type == QLatin1String("CALL_ESTABLISHED") || type == QLatin1String("CALL_PROGRESS")))
+                awaitingRecording.append(id);
+            if (callEvent && type == QLatin1String("CALL_CLOSED"))
+                awaitingRecording.removeAll(id);
+            awaitingRecording.removeIf([&](const QString &waiting) { return matchRecording(waiting); });
         }
+        if (!callEvent)
+            return;
         if (type == QLatin1String("CALL_INCOMING")) {
             ringing.insert(id);
         } else if (type == QLatin1String("CALL_ESTABLISHED")) {

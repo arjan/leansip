@@ -19,6 +19,7 @@ leansip_add_test(tst_dtmf_tone)
 leansip_add_test(tst_baresip_event)
 leansip_add_test(tst_baresip_client)
 leansip_add_test(tst_baresip_process)
+leansip_add_test(tst_baresip_binary)
 leansip_add_test(tst_call_controller)
 leansip_add_test(tst_single_instance)
 leansip_add_test(tst_ctrl_proxy)
@@ -27,6 +28,9 @@ leansip_add_test(tst_call_audio)
 leansip_add_test(tst_elevenlabs)
 leansip_add_test(tst_unix_signals)
 leansip_add_test(tst_main_window LIBS leansip_ui)
+if(LEANSIP_QT_STATIC)
+    qt_import_plugins(tst_main_window INCLUDE Qt6::QOffscreenIntegrationPlugin)
+endif()
 
 # End to end with a real baresip on the loopback interface; skipped (77) without baresip.
 add_test(NAME integration_loopback

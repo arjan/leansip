@@ -30,6 +30,23 @@ so an agent can watch or drive a call you are on, and you can hang up a call an 
 - The daemon's output, and baresip's, goes to `leansipd.log` in the same directory (rotated at
   5 MB). It restarts baresip if baresip crashes.
 
+## Which baresip
+
+leansipd runs the first of (`src/core/baresip_binary.h`):
+
+1. `$LEANSIP_BARESIP`, a path or a name in `PATH`;
+2. the baresip embedded in leansipd itself (the static Linux build). On first use it is written
+   to `~/.cache/leansip/baresip-<hash>/` (0700) with its stock sounds; the directory is named
+   after a hash of the binary, so an upgrade gets its own copy, and a copy already there is
+   checked against that hash on every start and rewritten if it differs;
+3. the baresip the build was configured with (`-DLEANSIP_BARESIP_PATH`, with
+   `-DLEANSIP_BARESIP_SOUNDS`): Homebrew's formula builds its own into `libexec`;
+4. `baresip` in `PATH` with its modules in `/usr/lib/baresip/modules` (the `.deb`).
+
+The embedded and Homebrew baresips are 4.13 built with `STATIC=ON`: every module leansip uses
+(`opus`, `g722`, `g711`, `alsa` or `coreaudio`, `sndfile`, `ctrl_tcp`, `menu`, ...) is compiled
+in, so `module_path` does not matter to them.
+
 ## baresip's files
 
 leansipd writes baresip's configuration directory into the runtime directory:
@@ -97,4 +114,18 @@ Set `project(leansip VERSION x.y.z)` in `CMakeLists.txt`, commit, and push a tag
 `.github/workflows/release.yml` builds in an Ubuntu 26.04 container (the oldest release with
 baresip 1.1.0, which leansip needs for call ids), runs all tests
 including the loopback call test, packages with CPack, installs and runs the `.deb`, and
-publishes the release with `SHA256SUMS` and build provenance attestations.
+publishes the release with `SHA256SUMS` and build provenance attestations. It also attaches
+the static Linux tarball, built by `.github/workflows/build.yml`.
+
+`build.yml` runs on every push to main and every pull request:
+
+- `linux-static`: `docker build -f packaging/linux-static/Dockerfile -o dist .` builds a static
+  Qt (`build-qt.sh`), a self-contained baresip (`build-baresip.sh`) and leansip with that baresip
+  embedded in leansipd (`build-leansip.sh`, which runs every test, the loopback call included),
+  then starts the result on a plain Ubuntu. The same command works locally; Qt takes 15-30
+  minutes the first time, after which Docker's cache keeps it.
+- `macos`: installs leansip from `Formula/leansip.rb` with `--HEAD` pointed at the checkout and
+  runs `brew test`.
+
+For a release, also bump `tag:` in `Formula/leansip.rb` to the new tag in the same commit:
+Homebrew users get the release that names.

@@ -18,18 +18,34 @@
 // Header-only, errors as values. This is the only translation unit that includes toml++.
 #define TOML_HEADER_ONLY 1
 #define TOML_EXCEPTIONS 0
+#if __has_include(<toml++/toml.hpp>)
 #include <toml++/toml.hpp>
+#else
+#include <toml++/toml.h> // toml++ before 3.4 (Debian 12)
+#endif
 
 namespace leansip::settings {
 
 namespace {
 
+// What differs per platform in baresip's own defaults: the poll method (ignored by baresip 4),
+// where the system keeps its CA bundle, and the sound system.
+#ifdef Q_OS_MACOS
+#define LEANSIP_POLL_METHOD "kqueue"
+#define LEANSIP_CAFILE "/etc/ssl/cert.pem"
+#define LEANSIP_AUDIO "coreaudio"
+#else
+#define LEANSIP_POLL_METHOD "epoll"
+#define LEANSIP_CAFILE "/etc/ssl/certs/ca-certificates.crt"
+#define LEANSIP_AUDIO "alsa"
+#endif
+
 // baresip's own template, trimmed to audio calls. leansipd adds ctrl_tcp, aufile and the
 // account/menu modules it needs on top (config_deriver).
-constexpr const char *kTemplate = R"(# Core
-poll_method		epoll
-sip_cafile		/etc/ssl/certs/ca-certificates.crt
-sip_tos			160
+constexpr const char *kTemplate = "# Core\n"
+                                  "poll_method\t\t" LEANSIP_POLL_METHOD "\n"
+                                  "sip_cafile\t\t" LEANSIP_CAFILE "\n"
+                                  R"(sip_tos			160
 
 # Call
 call_local_timeout	120
@@ -37,10 +53,11 @@ call_max_calls		4
 call_hold_other_calls	yes
 
 # Audio
-audio_player		alsa,default
-audio_source		alsa,default
-audio_alert		alsa,default
-ausrc_srate		48000
+)"
+                                  "audio_player\t\t" LEANSIP_AUDIO ",default\n"
+                                  "audio_source\t\t" LEANSIP_AUDIO ",default\n"
+                                  "audio_alert\t\t" LEANSIP_AUDIO ",default\n"
+                                  R"(ausrc_srate		48000
 auplay_srate		48000
 audio_level		no
 ausrc_format		s16
@@ -64,8 +81,9 @@ module_path		/usr/lib/baresip/modules
 module			opus.so
 module			g722.so
 module			g711.so
-module			alsa.so
-module			uuid.so
+)"
+                                  "module\t\t\t" LEANSIP_AUDIO ".so\n"
+                                  R"(module			uuid.so
 module			stun.so
 module			turn.so
 module			ice.so

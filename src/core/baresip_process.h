@@ -15,9 +15,9 @@ public:
     explicit BaresipProcess(QObject *parent = nullptr);
     ~BaresipProcess() override;
 
-    // Writes `setup` into the derived directory and starts baresip on it.
-    // `binary` defaults to "baresip" resolved via PATH.
-    bool start(const config_deriver::Setup &setup, const QString &binary = QStringLiteral("baresip"));
+    // Writes `setup` into the derived directory and starts baresip on it. An empty `binary`
+    // means the one baresip_binary::locate() finds (embedded, configured, or in PATH).
+    bool start(const config_deriver::Setup &setup, const QString &binary = QString());
 
     // Graceful stop: terminate, then kill after a short grace period. Blocks briefly.
     void stop();

@@ -1,6 +1,6 @@
 # leansip
 
-A minimal, agent-friendly Linux SIP client.
+A minimal, agent-friendly SIP client for Linux and macOS.
 
 <img src="docs/screenshot-dial.png" width="272" alt="The leansip dialer before a call: a number typed on the green LCD"> <img src="docs/screenshot.png" width="272" alt="The leansip dialer during a call: bars of the caller's voice on a green LCD above the number and call time">
 
@@ -105,17 +105,39 @@ Full reference: [docs/leansipctl.md](docs/leansipctl.md).
 
 ## Install
 
-Each release has a `.deb` and a `.tar.gz` for x86-64 Linux. They are built on Ubuntu 26.04
-and need Qt 6.10 or newer. SIP and audio are done by
-[baresip](https://github.com/baresip/baresip) 1.1.0 or newer, which the `.deb` installs.
+### macOS (Homebrew)
 
 ```
-sudo apt install ./leansip_<version>_amd64.deb
+brew tap arjan/leansip https://github.com/arjan/leansip
+brew install leansip
 ```
 
-With the tarball you install baresip and Qt yourself. `SHA256SUMS` has the checksums, and
-`gh attestation verify <file> --repo arjan/leansip` checks that a file was built by this
-repository's release workflow.
+`brew install --HEAD leansip` builds `main` instead of the latest release. The formula builds
+leansip against Homebrew's Qt and comes with its own baresip, because Homebrew's baresip has no
+Opus or recording support. The first call asks for microphone access for the terminal you
+started leansip from. On macOS leansip is a command, not an app bundle, so `tel:` links do not
+open it yet. Homebrew on Linux works too.
+
+### Linux
+
+Each release has three downloads for x86-64 Linux:
+
+- `leansip-<version>-linux-static-x86_64.tar.gz` runs on any distribution with glibc 2.36 or
+  newer (Debian 12, Ubuntu 22.10 and later). Qt and baresip are built in: leansipd unpacks
+  baresip into `~/.cache/leansip` the first time it starts. It needs ALSA (`libasound2`) and the
+  X11 libraries every desktop has; on Wayland it runs through XWayland. Unpack it anywhere and
+  run `bin/leansip`.
+- A `.deb` and a `.tar.gz` for Ubuntu 26.04 that use the system's Qt 6.10 and
+  [baresip](https://github.com/baresip/baresip) 1.1.0 or newer, which the `.deb` installs:
+
+  ```
+  sudo apt install ./leansip_<version>_amd64.deb
+  ```
+
+  With that tarball you install baresip and Qt yourself.
+
+`SHA256SUMS` has the checksums, and `gh attestation verify <file> --repo arjan/leansip` checks
+that a file was built by this repository's release workflow.
 
 ## Configuration
 
@@ -155,7 +177,9 @@ ctest --test-dir build --output-on-failure
 ```
 
 Building needs Qt 6.4 or newer. Running needs baresip 1.1.0 or newer: Ubuntu 26.04 has it,
-but 24.04 ships 1.0.0, which is too old. `sudo cmake --install build` installs leansip, and
+but 24.04 ships 1.0.0, which is too old. `LEANSIP_BARESIP=/path/to/baresip` makes leansipd run
+another one. `docker build -f packaging/linux-static/Dockerfile -o dist .` makes the static
+tarball. `sudo cmake --install build` installs leansip, and
 `cpack` in the build directory makes the release packages.
 [docs/architecture.md](docs/architecture.md) explains how the parts fit together and how to
 cut a release.

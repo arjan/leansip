@@ -1,6 +1,7 @@
 #include "unix_signals.h"
 
 #include <csignal>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -25,8 +26,13 @@ UnixSignalBridge::~UnixSignalBridge()
 
 bool UnixSignalBridge::install(std::initializer_list<int> signums)
 {
-    if (s_fds[0] < 0 && ::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s_fds) != 0)
-        return false;
+    if (s_fds[0] < 0) {
+        // No SOCK_CLOEXEC on macOS; nothing forks between these calls (install runs at startup).
+        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, s_fds) != 0)
+            return false;
+        for (int fd : s_fds)
+            ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
 
     m_notifier = new QSocketNotifier(s_fds[1], QSocketNotifier::Read, this);
     connect(m_notifier, &QSocketNotifier::activated, this, [this] {
@@ -41,7 +47,7 @@ bool UnixSignalBridge::install(std::initializer_list<int> signums)
             continue; // respect `nohup` and friends
         struct sigaction action{};
         action.sa_handler = &UnixSignalBridge::handler;
-        ::sigemptyset(&action.sa_mask);
+        sigemptyset(&action.sa_mask); // a macro on macOS: no ::
         action.sa_flags = SA_RESTART;
         ::sigaction(signum, &action, nullptr);
     }
