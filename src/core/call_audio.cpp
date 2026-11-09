@@ -14,6 +14,23 @@ namespace {
 
 constexpr qint64 kPage = 4096;
 
+// Gives the disk blocks of [from, from + length) back without changing the file size or
+// offsets. Both must be page aligned (macOS wants the file system block size; APFS: 4096).
+bool punchHole(int fd, qint64 from, qint64 length)
+{
+#if defined(Q_OS_LINUX)
+    return fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, from, length) == 0;
+#elif defined(Q_OS_MACOS)
+    fpunchhole_t hole{};
+    hole.fp_offset = from;
+    hole.fp_length = length;
+    return fcntl(fd, F_PUNCHHOLE, &hole) == 0;
+#else
+    Q_UNUSED(fd) Q_UNUSED(from) Q_UNUSED(length)
+    return false;
+#endif
+}
+
 qint64 roundUp(qint64 value, qint64 to) { return (value + to - 1) / to * to; }
 
 } // namespace
@@ -86,7 +103,7 @@ std::optional<QVector<qint16>> WavTail::poll(int maxBacklogMs, QString *error)
     if (m_release) {
         const qint64 to = m_offset / kPage * kPage;
         if (to - m_releasedTo >= kReleaseChunk) {
-            if (fallocate(m_file.handle(), FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, m_releasedTo, to - m_releasedTo) == 0)
+            if (punchHole(m_file.handle(), m_releasedTo, to - m_releasedTo))
                 m_releasedTo = to;
             else
                 m_release = false; // not supported here; keep reading without it
