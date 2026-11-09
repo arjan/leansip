@@ -47,7 +47,7 @@ bool UnixSignalBridge::install(std::initializer_list<int> signums)
             continue; // respect `nohup` and friends
         struct sigaction action{};
         action.sa_handler = &UnixSignalBridge::handler;
-        ::sigemptyset(&action.sa_mask);
+        sigemptyset(&action.sa_mask); // a macro on macOS: no ::
         action.sa_flags = SA_RESTART;
         ::sigaction(signum, &action, nullptr);
     }
