@@ -1,4 +1,6 @@
+#include "core/baresip_binary.h"
 #include "core/baresip_client.h"
+#include "core/baresip_import.h"
 #include "core/call_controller.h"
 #include "core/daemon_client.h"
 #include "core/profile.h"
@@ -9,8 +11,15 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
+#include <QFileInfo>
+#include <QFontDatabase>
+#include <QLabel>
 #include <QMessageBox>
+#include <QPlainTextEdit>
+#include <QVBoxLayout>
 #include <QTimer>
 
 #include <csignal>
@@ -45,6 +54,52 @@ std::optional<Endpoint> parseEndpoint(const QString &spec)
     if (!ok || port == 0 || port > 65535)
         return std::nullopt;
     return Endpoint{spec.left(colon), static_cast<quint16>(port)};
+}
+
+// No config file yet: offer to turn ~/.baresip* setups into profiles. Writes only on "Import".
+void offerBaresipImport(const QString &configPath)
+{
+    const QString homeDir = QDir::homePath();
+    // A cheap look first: baresip is only run (to learn its defaults) when there is something to import.
+    if (baresip_import::discover(homeDir, {}).profiles.isEmpty())
+        return;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    // Without a usable baresip, the import compares with leansip's template only.
+    const auto baresip = baresip_binary::locate();
+    const auto plan = baresip_import::discover(homeDir, baresip.error.isEmpty()
+                                                              ? baresip_import::baresipDefaultConfig(baresip.program)
+                                                              : QString());
+    QApplication::restoreOverrideCursor();
+    if (plan.profiles.isEmpty())
+        return;
+
+    QDialog dialog;
+    dialog.setWindowTitle(QStringLiteral("leansip: import baresip profiles"));
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *intro = new QLabel(QStringLiteral("There is no leansip config yet. leansip found %1 baresip account(s) and can "
+                                            "write them as profiles to\n%2\n\nSettings that are baresip or leansip "
+                                            "defaults are left out.")
+                                 .arg(plan.profiles.size())
+                                 .arg(configPath));
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+    auto *text = new QPlainTextEdit(baresip_import::summary(plan));
+    text->setReadOnly(true);
+    text->setLineWrapMode(QPlainTextEdit::NoWrap);
+    text->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    text->setMinimumSize(560, 300);
+    layout->addWidget(text);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
+    buttons->addButton(QStringLiteral("Import"), QDialogButtonBox::AcceptRole);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    QString error;
+    if (!baresip_import::write(configPath, baresip_import::toToml(plan), &error))
+        QMessageBox::warning(nullptr, QStringLiteral("leansip"), error);
 }
 
 } // namespace
@@ -92,6 +147,8 @@ int main(int argc, char *argv[])
     }
 
     const QString configPath = QDir(parser.value(configOpt)).absolutePath();
+    if (!QFileInfo::exists(configPath) && !QFileInfo(configPath).isSymLink())
+        offerBaresipImport(configPath);
     QString loadError;
     const auto config = settings::load(configPath, &loadError);
     const auto selected = config ? settings::select(*config, parser.value(profileOpt), &loadError) : std::nullopt;

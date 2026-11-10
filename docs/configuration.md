@@ -7,6 +7,24 @@ The file can hold passwords, so leansip refuses to read it unless it belongs to 
 readable by anyone else (`chmod 600`). Unknown keys are errors, so a typo never silently drops a
 setting.
 
+## Coming from baresip
+
+When the dialer starts and the config file does not exist yet, it looks for baresip setups in
+your home directory (`~/.baresip`, `~/.baresip2`, `~/.baresip-work`, ...). Each account line in
+their `accounts` files becomes a profile named after its directory (`baresip`, `baresip2`,
+`baresip-work`; a second account in one directory gets `-2`). It shows what it found and writes
+the file only after you choose Import.
+
+Only your own choices are carried over. A `config` setting is left out when it matches what
+baresip writes into a new config (leansip runs `baresip -f <temp dir> -t 1` once to find out) or
+leansip's built-in setting, and so are settings leansipd manages, video settings, the user
+interface modules, and account parameters at baresip's default (`answermode=manual`,
+`regint=3600`, `pubint=0`, `ptime=20`). baresip's `uuid` file is not used: leansip derives an
+instance id per profile. Passwords are copied into the file as `password`; switch to
+`password_cmd` afterwards if you keep them in a password manager. An account leansip cannot
+express (an outbound proxy with `;` parameters, for example) is listed with the reason and left
+out.
+
 ## Which profile
 
 `--profile`/`-p` if given, else `$LEANSIP_PROFILE`, else `default_profile`, else the only profile

@@ -44,6 +44,8 @@ qt_add_library(leansip_core STATIC
     core/call_audio.h
     core/baresip_binary.cpp
     core/baresip_binary.h
+    core/baresip_import.cpp
+    core/baresip_import.h
 )
 target_include_directories(leansip_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(leansip_core PUBLIC Qt6::Core Qt6::Network PRIVATE leansip_warnings)
